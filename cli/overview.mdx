@@ -1,0 +1,240 @@
+---
+title: CLI Overview
+description: The official command-line interface for managing your Revstack billing configuration as code
+---
+
+The Revstack CLI is a command-line tool that enables you to manage your entire billing infrastructure through code. Define plans, features, and entitlements in `revstack.config.ts`, then push them to Revstack Cloud with a single command.
+
+## Key Features
+
+- **Billing as Code**: Define your entire billing model in a type-safe TypeScript configuration file
+- **Zero-Build Config Loading**: Evaluates `revstack.config.ts` on the fly using `jiti` — no separate compilation step needed
+- **Diff Before Deploy**: Every `push` shows a detailed diff of what will change before anything goes live
+- **Environment Targeting**: Push and pull configs to/from different environments (`test`, `production`, etc.)
+- **Interactive Authentication**: Securely store your API key locally at `~/.revstack/credentials.json`
+
+## Installation
+
+Install globally via npm:
+
+```bash
+npm install -g @revstackhq/cli
+```
+
+Or use it directly with npx:
+
+```bash
+npx @revstackhq/cli init
+```
+
+## Quick Start
+
+### 1. Initialize a Config
+
+Scaffold a new `revstack.config.ts` in your project root:
+
+```bash
+revstack init
+```
+
+This creates:
+- A `revstack/` directory containing modular configuration files
+- A `revstack.config.ts` file that imports and combines them
+- A starter config with example plans and features
+
+The generated structure looks like this:
+
+```
+your-project/
+├── revstack.config.ts
+└── revstack/
+    ├── features.ts
+    ├── plans.ts
+    ├── addons.ts
+    ├── coupons.ts
+    └── index.ts
+```
+
+**Example: `revstack/features.ts`**
+
+```typescript
+import { defineFeature } from "@revstackhq/core";
+
+export const features = {
+  seats: defineFeature({
+    name: "Seats",
+    type: "static",
+    unit_type: "count",
+  }),
+  ai_tokens: defineFeature({
+    name: "AI Tokens",
+    type: "metered",
+    unit_type: "count",
+  }),
+};
+```
+
+**Example: `revstack/plans.ts`**
+
+```typescript
+import { definePlan } from "@revstackhq/core";
+import { features } from "./features";
+
+export const plans = {
+  default: definePlan<typeof features>({
+    name: "Default",
+    description: "Automatically created default plan for guests.",
+    is_default: true,
+    is_public: false,
+    type: "free",
+    features: {},
+  }),
+  pro: definePlan<typeof features>({
+    name: "Pro",
+    description: "For professional teams.",
+    is_default: false,
+    is_public: true,
+    type: "paid",
+    prices: [
+      {
+        amount: 2900,
+        currency: "USD",
+        billing_interval: "monthly",
+        trial_period_days: 14,
+      },
+    ],
+    features: {
+      seats: { value_limit: 5, is_hard_limit: true },
+      ai_tokens: { value_limit: 1000, reset_period: "monthly" },
+    },
+  }),
+};
+```
+
+### 2. Authenticate
+
+Log in with your Revstack Secret Key (found in the [Revstack Dashboard](https://app.revstack.dev)):
+
+```bash
+revstack login
+```
+
+You'll be prompted to enter your secret key:
+
+```
+  Revstack — Authentication
+
+? Enter your Revstack Secret Key: [hidden]
+
+  ✔ Authenticated successfully!
+    Credentials saved to ~/.revstack/credentials.json
+```
+
+Your credentials are stored locally and never leave your machine.
+
+### 3. Deploy
+
+Push your config to Revstack Cloud:
+
+```bash
+revstack push
+```
+
+The CLI will:
+1. Validate your `revstack.config.ts` for schema and business logic errors
+2. Calculate a diff against the current remote state
+3. Display a color-coded summary of changes (additions, removals, updates)
+4. Ask for confirmation before applying
+
+**Example output:**
+
+```
+ ✔ Configuration validated
+ ✔ Diff calculated
+
+  Changes:
+
+  features
+  + ai_tokens AI Tokens
+  ~ seats Updated limit from 10 to 5
+
+  plans
+  + pro Pro plan
+
+  Summary: 2 added, 1 updated, 0 removed
+
+? Apply these changes to test? (y/N)
+```
+
+### 4. Pull Remote State
+
+Fetch the current billing configuration from Revstack Cloud and overwrite your local files:
+
+```bash
+revstack pull
+```
+
+This is useful for:
+- Syncing changes made in the Revstack Dashboard back to your codebase
+- Pulling configuration from one environment to another
+- Team collaboration when multiple developers work on billing config
+
+### 5. Log Out
+
+Clear stored credentials:
+
+```bash
+revstack logout
+```
+
+## Configuration File
+
+The `revstack.config.ts` file is the entry point for your billing configuration. It uses type-safe helpers from `@revstackhq/core` to define your billing model:
+
+```typescript
+import { defineConfig } from "@revstackhq/core";
+import { features } from "./revstack/features";
+import { plans } from "./revstack/plans";
+import { addons } from "./revstack/addons";
+import { coupons } from "./revstack/coupons";
+
+export default defineConfig({
+  features,
+  plans,
+  addons,
+  coupons,
+});
+```
+
+## Templates
+
+The `init` command supports several templates to help you get started quickly:
+
+- **starter** (default): Basic setup with a free and paid plan
+- **b2b-saas**: Tiered pricing for business software
+- **usage-based**: Metered billing for API/infrastructure products
+- **ecommerce-platform**: Transaction-based pricing
+- **developer-tools**: Per-developer seat licensing
+- **ai-agent-platform**: Token-based consumption pricing
+
+To use a specific template:
+
+```bash
+revstack init --template b2b-saas
+```
+
+## Architecture
+
+The Revstack CLI is intentionally a "dumb client." All complex diffing, validation, and migration logic lives on the Revstack Cloud backend. The CLI's responsibilities are limited to:
+
+1. **Config Loading**: Evaluate `revstack.config.ts` at runtime using `jiti` and sanitize the output to plain JSON
+2. **Authentication**: Store and retrieve the API key from `~/.revstack/credentials.json`
+3. **Network Communication**: Send the parsed config to the Revstack API and display the results
+
+This keeps the CLI lightweight, fast to install, and ensures the source of truth for billing logic always lives server-side.
+
+## Next Steps
+
+- [Command Reference](/cli/commands) - Detailed documentation for all CLI commands
+- [Configuration Guide](/guides/configuration) - Learn how to configure plans, features, and pricing
+- [Environment Management](/guides/environments) - Best practices for managing multiple environments

@@ -1,0 +1,407 @@
+---
+title: EntitlementEngine
+description: Evaluate feature access and entitlements for customers
+---
+
+## Overview
+
+The `EntitlementEngine` class evaluates feature access for a single customer based on their active plan, purchased add-ons, and subscription status. It is stateless, has no side effects, and is safe to call from any context.
+
+## Class Signature
+
+```typescript
+class EntitlementEngine {
+  constructor(
+    plan: PlanDef,
+    addons?: AddonDef[],
+    subscriptionStatus?: SubscriptionStatus
+  )
+
+  check(featureId: string, currentUsage?: number): CheckResult
+  checkBatch(usages: Record<string, number>): Record<string, CheckResult>
+}
+```
+
+## Constructor
+
+<ParamField path="plan" type="PlanDef" required>
+  The customer's active base plan.
+</ParamField>
+
+<ParamField path="addons" type="AddonDef[]" default="[]">
+  Active add-ons the customer has purchased.
+</ParamField>
+
+<ParamField path="subscriptionStatus" type="SubscriptionStatus" default="'active'">
+  Current payment/lifecycle state of the subscription:
+  - `active`: Subscription is current and paid
+  - `trialing`: In trial period
+  - `past_due`: Payment failed, blocks all access
+  - `canceled`: Subscription canceled, blocks all access
+  - `paused`: Subscription paused
+</ParamField>
+
+## Methods
+
+### check()
+
+Verify if the customer has access to a specific feature.
+
+```typescript
+check(featureId: string, currentUsage?: number): CheckResult
+```
+
+<ParamField path="featureId" type="string" required>
+  The feature slug to check (e.g., `"seats"`, `"api_calls"`).
+</ParamField>
+
+<ParamField path="currentUsage" type="number" default="0">
+  Current consumption count for metered features.
+</ParamField>
+
+<ResponseField name="result" type="CheckResult">
+  The access decision and metadata.
+
+  <Expandable title="CheckResult properties">
+    <ResponseField name="allowed" type="boolean" required>
+      Whether the action is allowed.
+    </ResponseField>
+
+    <ResponseField name="reason" type="'feature_missing' | 'limit_reached' | 'past_due' | 'included' | 'overage_allowed'">
+      Why the action was allowed or denied:
+      - `feature_missing`: Feature not included in plan or add-ons
+      - `limit_reached`: Hard limit reached, access blocked
+      - `past_due`: Subscription past due or canceled
+      - `included`: Usage within included limit
+      - `overage_allowed`: Limit reached but soft limit allows overage
+    </ResponseField>
+
+    <ResponseField name="remaining" type="number">
+      Units remaining before hitting the limit. `Infinity` if unlimited.
+    </ResponseField>
+
+    <ResponseField name="granted_by" type="string[]">
+      Which sources granted access (plan and/or addon slugs).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### checkBatch()
+
+Evaluate multiple features in a single pass.
+
+```typescript
+checkBatch(usages: Record<string, number>): Record<string, CheckResult>
+```
+
+<ParamField path="usages" type="Record<string, number>" required>
+  Map of `featureSlug → currentUsage` to evaluate.
+</ParamField>
+
+<ResponseField name="results" type="Record<string, CheckResult>">
+  Map of `featureSlug → CheckResult`.
+</ResponseField>
+
+## Usage
+
+### Basic Check - Boolean Feature
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+const engine = new EntitlementEngine(plan, addons, "active");
+
+const result = engine.check("sso");
+
+if (result.allowed) {
+  // Customer has SSO access
+  enableSSOLogin();
+} else {
+  // Show upgrade prompt
+  showUpgradeModal();
+}
+```
+
+### Static Feature - Seats
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+const engine = new EntitlementEngine(plan, addons);
+
+const currentSeats = 8;
+const result = engine.check("seats", currentSeats);
+
+if (result.allowed) {
+  console.log(`You can add ${result.remaining} more seats`);
+  allowAddMember();
+} else if (result.reason === "limit_reached") {
+  showUpgradePrompt("You've reached your seat limit");
+}
+```
+
+### Metered Feature - API Calls
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+const engine = new EntitlementEngine(plan, addons);
+
+const currentUsage = await getMonthlyAPICallCount(customerId);
+const result = engine.check("api_calls", currentUsage);
+
+if (!result.allowed) {
+  if (result.reason === "limit_reached") {
+    return res.status(429).json({ 
+      error: "API rate limit exceeded",
+      message: "Upgrade your plan for more API calls",
+    });
+  } else if (result.reason === "past_due") {
+    return res.status(403).json({ 
+      error: "Subscription past due",
+      message: "Please update your payment method",
+    });
+  }
+}
+
+// Process the API request
+processAPIRequest();
+```
+
+### Overage Handling
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+const engine = new EntitlementEngine(plan, addons);
+
+const usage = 105000; // Over the 100k limit
+const result = engine.check("api_calls", usage);
+
+if (result.allowed) {
+  if (result.reason === "overage_allowed") {
+    // Soft limit - allow but track overage
+    const overage = usage - result.remaining;
+    console.log(`Overage: ${overage} API calls`);
+    // Bill customer based on price.overage_configuration
+  } else {
+    // Within included limit
+    console.log(`Remaining: ${result.remaining} API calls`);
+  }
+}
+```
+
+### Batch Check
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+const engine = new EntitlementEngine(plan, addons);
+
+const results = engine.checkBatch({
+  seats: 8,
+  projects: 15,
+  storage: 50_000_000_000,
+  api_calls: 45000,
+});
+
+// Check results for each feature
+for (const [feature, result] of Object.entries(results)) {
+  if (!result.allowed) {
+    console.warn(`${feature}: ${result.reason}`);
+  }
+}
+```
+
+### With Add-ons
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+// Base plan: 10 seats
+const plan = { 
+  slug: "pro",
+  features: { seats: { value_limit: 10 } },
+  // ...
+};
+
+// Add-on: +5 seats
+const addons = [
+  {
+    slug: "extra_seats",
+    features: { 
+      seats: { 
+        value_limit: 5, 
+        type: "increment",
+      },
+    },
+    // ...
+  },
+];
+
+const engine = new EntitlementEngine(plan, addons);
+
+const result = engine.check("seats", 12);
+
+console.log(result.allowed); // true
+console.log(result.remaining); // 3 (10 + 5 - 12 = 3)
+console.log(result.granted_by); // ["pro", "extra_seats"]
+```
+
+### Subscription Status Gating
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+
+// Subscription is past due
+const engine = new EntitlementEngine(plan, addons, "past_due");
+
+const result = engine.check("any_feature");
+
+console.log(result.allowed); // false
+console.log(result.reason); // "past_due"
+console.log(result.remaining); // 0
+
+// Block all access until payment is resolved
+if (result.reason === "past_due") {
+  redirectToPaymentPage();
+}
+```
+
+### Express.js Middleware
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+import type { Request, Response, NextFunction } from "express";
+
+function requireFeature(featureSlug: string) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const customer = req.user;
+    const plan = await getPlan(customer.planId);
+    const addons = await getAddons(customer.id);
+    const status = customer.subscriptionStatus;
+
+    const engine = new EntitlementEngine(plan, addons, status);
+    const result = engine.check(featureSlug);
+
+    if (!result.allowed) {
+      return res.status(403).json({
+        error: "Feature not available",
+        reason: result.reason,
+        upgrade_url: "/pricing",
+      });
+    }
+
+    next();
+  };
+}
+
+// Protect routes
+app.post("/api/sso/configure", requireFeature("sso"), configureSSOHandler);
+```
+
+### Next.js Server Action
+
+```typescript
+import { EntitlementEngine } from "@revstack/core";
+import { getCurrentUser } from "@/lib/auth";
+import { getPlanWithAddons } from "@/lib/billing";
+
+export async function createProject(data: ProjectInput) {
+  const user = await getCurrentUser();
+  const { plan, addons } = await getPlanWithAddons(user.id);
+  
+  const engine = new EntitlementEngine(plan, addons, user.subscriptionStatus);
+  
+  const currentProjects = await db.project.count({ 
+    where: { userId: user.id },
+  });
+  
+  const result = engine.check("projects", currentProjects);
+  
+  if (!result.allowed) {
+    throw new Error(`Project limit reached. ${result.reason}`);
+  }
+  
+  return await db.project.create({ data });
+}
+```
+
+## Aggregation Logic
+
+The engine combines entitlements from the plan and all add-ons:
+
+### Processing Order
+
+1. Base plan is processed first
+2. Add-ons with `type: "set"` are processed next (sorted deterministically)
+3. Add-ons with `type: "increment"` are processed last
+
+### Increment Behavior
+
+Limits are **summed** together:
+
+```typescript
+// Plan: 10 seats
+// Addon 1: +5 seats (increment)
+// Addon 2: +3 seats (increment)
+// Total: 10 + 5 + 3 = 18 seats
+```
+
+### Set Behavior
+
+Completely **replaces** the previous limit:
+
+```typescript
+// Plan: 10 seats
+// Addon 1: +5 seats (increment)
+// Addon 2: 50 seats (set)
+// Total: 50 seats (addon 2 overrides everything)
+```
+
+### Soft Limits
+
+If **ANY** source sets `is_hard_limit: false`, the entire feature becomes soft-limited:
+
+```typescript
+// Plan: { value_limit: 1000, is_hard_limit: true }
+// Addon: { is_hard_limit: false }
+// Result: Overage allowed (soft limit)
+```
+
+### Boolean Features
+
+If **ANY** source grants `value_bool: true` or `has_access: true`, access is granted:
+
+```typescript
+// Plan: { value_bool: false }
+// Addon: { has_access: true }
+// Result: Access granted
+```
+
+## Blocked Statuses
+
+When the subscription is in a blocked status, **all features** return:
+
+```typescript
+{
+  allowed: false,
+  reason: "past_due",
+  remaining: 0,
+}
+```
+
+**Blocked statuses**: `past_due`, `canceled`
+
+**Allowed statuses**: `active`, `trialing`, `paused`
+
+## Source
+
+**Location**: [`packages/core/src/engine.ts:42-205`](~/workspace/source/packages/core/src/engine.ts)
+
+## Related
+
+- [defineConfig](/api/core/define-config) - Define the billing configuration
+- [definePlan](/api/core/define-plan) - Define plans evaluated by the engine
+- [defineAddon](/api/core/define-addon) - Define add-ons aggregated by the engine
+- [validateConfig](/api/core/validator) - Validate configuration before using the engine

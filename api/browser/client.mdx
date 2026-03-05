@@ -1,0 +1,396 @@
+---
+title: 'Browser Client'
+description: 'Vanilla JavaScript client for browser-based applications'
+---
+
+## RevstackClient
+
+Core client class for managing entitlements, checkout, and billing portal sessions.
+
+### Constructor
+
+```typescript
+new RevstackClient(config: RevstackConfig)
+```
+
+**Parameters**
+
+<ParamField path="config" type="RevstackConfig" required>
+  <Expandable title="Configuration properties">
+    <ParamField path="publicKey" type="string" required>
+      Your project's public key
+    </ParamField>
+    
+    <ParamField path="getToken" type="() => Promise<string | null>" required>
+      Function that returns the user's JWT token, or `null` if anonymous
+    </ParamField>
+    
+    <ParamField path="apiUrl" type="string">
+      Custom API base URL (defaults to `https://app.revstack.dev`)
+    </ParamField>
+    
+    <ParamField path="getGuestId" type="() => Promise<string>">
+      Custom guest ID resolver (overrides fingerprinting)
+    </ParamField>
+    
+    <ParamField path="disableFingerprint" type="boolean">
+      Set `true` to skip browser fingerprinting
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+## Properties
+
+### isInitialized
+
+```typescript
+client.isInitialized: boolean
+```
+
+Returns `true` if `init()` completed successfully.
+
+---
+
+### isReady
+
+```typescript
+client.isReady: boolean
+```
+
+Returns `true` once `init()` has settled (success or failure). Use this to show loading spinners.
+
+---
+
+## Methods
+
+### init()
+
+Resolves identity, fetches entitlements, and caches them locally.
+
+```typescript
+await client.init(): Promise<void>
+```
+
+**Usage**
+```typescript
+const client = new RevstackClient(config);
+await client.init();
+```
+
+**Call this once on app startup** before accessing entitlements.
+
+---
+
+### getEntitlement()
+
+Returns the cached entitlement for a feature key.
+
+```typescript
+client.getEntitlement(key: string): Entitlement
+```
+
+**Parameters**
+- `key` (string) - The feature key
+
+**Returns**
+- `Entitlement` with `{ key, hasAccess, value? }`
+- Returns `{ key, hasAccess: false }` if key not found
+
+**Usage**
+```typescript
+const entitlement = client.getEntitlement('premium-feature');
+
+if (entitlement.hasAccess) {
+  showPremiumUI();
+}
+```
+
+---
+
+### hasAccess()
+
+Convenience method that checks if a feature is accessible.
+
+```typescript
+client.hasAccess(key: string): boolean
+```
+
+**Parameters**
+- `key` (string) - The feature key
+
+**Returns**
+- `true` if user has access, `false` otherwise
+
+**Usage**
+```typescript
+if (client.hasAccess('advanced-analytics')) {
+  renderAnalyticsDashboard();
+} else {
+  renderUpgradePrompt();
+}
+```
+
+---
+
+### startCheckout()
+
+Creates a checkout session and redirects to the Revstack checkout page.
+
+```typescript
+await client.startCheckout(params: CheckoutParams): Promise<void>
+```
+
+**Parameters**
+
+<ParamField path="params" type="CheckoutParams" required>
+  <Expandable title="CheckoutParams properties">
+    <ParamField path="planId" type="string" required>
+      The plan ID to subscribe to
+    </ParamField>
+    
+    <ParamField path="successUrl" type="string" required>
+      URL to redirect to after successful payment
+    </ParamField>
+    
+    <ParamField path="cancelUrl" type="string" required>
+      URL to redirect to if user cancels
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Usage**
+```typescript
+const checkoutButton = document.getElementById('subscribe');
+
+checkoutButton.addEventListener('click', async () => {
+  await client.startCheckout({
+    planId: 'plan_pro_monthly',
+    successUrl: 'https://app.example.com/welcome',
+    cancelUrl: 'https://app.example.com/pricing',
+  });
+});
+```
+
+---
+
+### openBillingPortal()
+
+Opens the billing portal where users can manage their subscription.
+
+```typescript
+await client.openBillingPortal(params: BillingPortalParams): Promise<void>
+```
+
+**Parameters**
+
+<ParamField path="params" type="BillingPortalParams" required>
+  <Expandable title="BillingPortalParams properties">
+    <ParamField path="returnUrl" type="string" required>
+      URL to redirect back to when user exits the portal
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Usage**
+```typescript
+const manageButton = document.getElementById('manage-subscription');
+
+manageButton.addEventListener('click', async () => {
+  await client.openBillingPortal({
+    returnUrl: 'https://app.example.com/settings',
+  });
+});
+```
+
+---
+
+### subscribe()
+
+Subscribes to entitlement changes. Returns an unsubscribe function.
+
+```typescript
+client.subscribe(listener: () => void): () => void
+```
+
+**Parameters**
+- `listener` (function) - Callback invoked when entitlements change
+
+**Returns**
+- Function to unsubscribe
+
+**Usage**
+```typescript
+const unsubscribe = client.subscribe(() => {
+  console.log('Entitlements updated!');
+  updateUI();
+});
+
+// Later: clean up
+unsubscribe();
+```
+
+---
+
+### getSnapshot()
+
+Returns the current version number (increments when entitlements change).
+
+```typescript
+client.getSnapshot(): number
+```
+
+Used internally by `useSyncExternalStore` in React. You typically won't call this directly.
+
+---
+
+## Complete Example
+
+<CodeGroup>
+```typescript Vanilla JS
+import { RevstackClient } from '@revstackhq/browser';
+
+const client = new RevstackClient({
+  publicKey: 'pk_live_...',
+  getToken: async () => localStorage.getItem('auth_token'),
+});
+
+// Initialize on page load
+await client.init();
+
+// Show loading state while initializing
+if (!client.isReady) {
+  document.getElementById('app').innerHTML = '<div>Loading...</div>';
+} else if (client.hasAccess('premium-feature')) {
+  renderPremiumUI();
+} else {
+  renderFreeUI();
+}
+
+// Handle checkout
+document.getElementById('upgrade-btn').addEventListener('click', async () => {
+  await client.startCheckout({
+    planId: 'plan_premium',
+    successUrl: window.location.origin + '/success',
+    cancelUrl: window.location.origin + '/pricing',
+  });
+});
+
+// Handle billing portal
+document.getElementById('manage-btn').addEventListener('click', async () => {
+  await client.openBillingPortal({
+    returnUrl: window.location.href,
+  });
+});
+
+// Listen for entitlement changes
+client.subscribe(() => {
+  console.log('Entitlements updated');
+  if (client.hasAccess('new-feature')) {
+    showNewFeatureNotification();
+  }
+});
+```
+
+```html HTML Integration
+<!DOCTYPE html>
+<html>
+<head>
+  <title>My App</title>
+</head>
+<body>
+  <div id="app">
+    <div id="loading">Loading...</div>
+  </div>
+
+  <script type="module">
+    import { RevstackClient } from 'https://esm.sh/@revstackhq/browser';
+
+    const client = new RevstackClient({
+      publicKey: 'pk_live_...',
+      getToken: async () => null, // Anonymous user
+    });
+
+    async function init() {
+      await client.init();
+      
+      const app = document.getElementById('app');
+      
+      if (client.hasAccess('premium')) {
+        app.innerHTML = `
+          <h1>Premium Dashboard</h1>
+          <button id="manage">Manage Subscription</button>
+        `;
+        
+        document.getElementById('manage').onclick = async () => {
+          await client.openBillingPortal({
+            returnUrl: window.location.href,
+          });
+        };
+      } else {
+        app.innerHTML = `
+          <h1>Free Tier</h1>
+          <button id="upgrade">Upgrade to Premium</button>
+        `;
+        
+        document.getElementById('upgrade').onclick = async () => {
+          await client.startCheckout({
+            planId: 'plan_premium_monthly',
+            successUrl: window.location.origin + '/success',
+            cancelUrl: window.location.origin,
+          });
+        };
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
+```
+</CodeGroup>
+
+---
+
+## Types
+
+### RevstackConfig
+
+```typescript
+interface RevstackConfig {
+  publicKey: string;
+  apiUrl?: string;
+  getToken: () => Promise<string | null>;
+  getGuestId?: () => Promise<string>;
+  disableFingerprint?: boolean;
+}
+```
+
+### Entitlement
+
+```typescript
+interface Entitlement {
+  key: string;
+  hasAccess: boolean;
+  value?: string | number | boolean;
+}
+```
+
+### CheckoutParams
+
+```typescript
+interface CheckoutParams {
+  planId: string;
+  successUrl: string;
+  cancelUrl: string;
+}
+```
+
+### BillingPortalParams
+
+```typescript
+interface BillingPortalParams {
+  returnUrl: string;
+}
+```

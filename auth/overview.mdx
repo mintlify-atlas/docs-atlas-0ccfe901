@@ -1,0 +1,199 @@
+---
+title: "Auth Integration Overview"
+description: "Secure your Revstack API with JWT verification from any identity provider"
+---
+
+## Why integrate authentication?
+
+Revstack's auth integration bridges your identity provider with your billing infrastructure. When you verify JWTs at the API layer, you can:
+
+- **Authorize billing operations** based on authenticated user sessions
+- **Link subscriptions and entitlements** to verified user IDs
+- **Track usage** by authenticated users
+- **Prevent unauthorized access** to billing data and operations
+
+The `@revstackhq/auth` package provides a unified interface for JWT verification across multiple providers.
+
+## How JWT verification works
+
+Revstack uses the industry-standard [jose](https://github.com/panva/jose) library to verify JSON Web Tokens. The verification process depends on the signing strategy:
+
+### RS256 (Asymmetric)
+
+Most modern identity providers use RS256 with JWKS (JSON Web Key Set):
+
+1. Your identity provider signs tokens with a private key
+2. They publish the public keys at a JWKS endpoint
+3. Revstack fetches and caches these public keys
+4. Incoming tokens are verified against the cached keys
+5. The `issuer` and `audience` claims are validated
+
+**Supported providers:** Auth0, Clerk, Supabase (default), Cognito, Firebase
+
+### HS256 (Symmetric)
+
+Some providers support shared secret verification:
+
+1. Your identity provider signs tokens with a shared secret
+2. You configure the same secret in your Revstack auth contract
+3. Incoming tokens are verified using the shared secret
+4. The `issuer` and `audience` claims are validated (if configured)
+
+**Supported providers:** Supabase, Custom JWT
+
+## Quick example
+
+Here's how to set up auth verification with Clerk:
+
+```typescript
+import { buildAuthContract, RevstackAuth } from "@revstackhq/auth";
+
+// 1. Build the auth contract (do this once, persist it)
+const contract = buildAuthContract("clerk", {
+  issuerUrl: "https://clerk.your-domain.com",
+});
+
+// 2. Initialize the verifier
+const auth = new RevstackAuth(contract);
+
+// 3. Verify tokens in your API routes
+const session = await auth.validate(req.headers.authorization);
+
+if (!session.isValid) {
+  return res.status(401).json({ error: session.error });
+}
+
+// Access the authenticated user ID
+console.log(session.userId); // e.g., "user_2xM..."
+console.log(session.claims); // Full JWT payload
+```
+
+## Auth contract
+
+The `buildAuthContract` function creates a `RevstackAuthContract` that contains:
+
+- **Provider slug** - Which identity provider is being used
+- **Strategy** - `RS256` or `HS256`
+- **JWKS URI** - Remote public key endpoint (RS256 only)
+- **Signing secret** - Shared secret (HS256 only)
+- **Issuer** - Expected `iss` claim in the JWT
+- **Audience** - Expected `aud` claim (optional)
+- **User ID claim** - Which claim contains the user ID (defaults to `sub`)
+
+This contract is provider-agnostic at runtime. Once built, you can verify tokens using the same `RevstackAuth` API regardless of the underlying provider.
+
+## Session response
+
+Every call to `auth.validate()` returns a `RevstackSession` object:
+
+```typescript
+interface RevstackSession<T = Record<string, any>> {
+  isValid: boolean;
+  userId: string;
+  claims: T;
+  error?: string;
+  errorCode?: AuthErrorCode;
+}
+```
+
+**On success:**
+- `isValid` is `true`
+- `userId` contains the extracted user identifier
+- `claims` contains the full decoded JWT payload
+
+**On failure:**
+- `isValid` is `false`
+- `error` contains a human-readable message
+- `errorCode` is one of: `TOKEN_EXPIRED`, `INVALID_SIGNATURE`, `ISSUER_MISMATCH`, `NETWORK_ERROR`, `MISSING_CLAIM`, `INVALID_FORMAT`, or `UNKNOWN_ERROR`
+
+## Error handling
+
+Handle specific error cases to provide better user experience:
+
+```typescript
+import { AuthErrorCode } from "@revstackhq/auth";
+
+const session = await auth.validate(token);
+
+if (!session.isValid) {
+  switch (session.errorCode) {
+    case AuthErrorCode.TOKEN_EXPIRED:
+      return res.status(401).json({ 
+        error: "Token expired. Please log in again." 
+      });
+    
+    case AuthErrorCode.INVALID_SIGNATURE:
+      return res.status(401).json({ 
+        error: "Invalid token signature." 
+      });
+    
+    case AuthErrorCode.NETWORK_ERROR:
+      return res.status(503).json({ 
+        error: "Unable to verify token. Please try again." 
+      });
+    
+    default:
+      return res.status(401).json({ error: "Unauthorized" });
+  }
+}
+```
+
+## Performance considerations
+
+### JWKS caching
+
+For RS256 verification, Revstack caches the remote JWKS to minimize network requests. You can configure the cache behavior:
+
+```typescript
+const auth = new RevstackAuth(contract, {
+  jwksCache: {
+    cacheMaxAge: 600000, // 10 minutes (default)
+    cooldownDuration: 30000, // 30 seconds between refetches
+  },
+});
+```
+
+### Contract reuse
+
+Build your auth contract once at startup and reuse the `RevstackAuth` instance across requests:
+
+```typescript
+// server.ts - Initialize once
+const contract = buildAuthContract("auth0", {
+  domain: process.env.AUTH0_DOMAIN!,
+  audience: process.env.AUTH0_AUDIENCE,
+});
+
+export const auth = new RevstackAuth(contract);
+
+// routes/api.ts - Reuse the instance
+import { auth } from "../server";
+
+const session = await auth.validate(req.headers.authorization);
+```
+
+## Next steps
+
+Choose your identity provider to see specific integration examples:
+
+<CardGroup cols={2}>
+  <Card title="Auth0" icon="shield" href="/auth/auth0">
+    Enterprise identity with OIDC and JWKS
+  </Card>
+  
+  <Card title="Clerk" icon="users" href="/auth/clerk">
+    Modern auth and user management
+  </Card>
+  
+  <Card title="Supabase" icon="database" href="/auth/supabase">
+    Open-source auth with RS256 or HS256
+  </Card>
+  
+  <Card title="Cognito" icon="aws" href="/auth/cognito">
+    AWS-managed user pools
+  </Card>
+  
+  <Card title="Firebase" icon="fire" href="/auth/firebase">
+    Google's authentication service
+  </Card>
+</CardGroup>

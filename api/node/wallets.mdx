@@ -1,0 +1,302 @@
+---
+title: "Wallets"
+description: "Manage customer wallet balances and credits"
+---
+
+## Overview
+
+The `WalletsClient` provides methods for managing customer wallet balances. It supports granting credits (bonuses, top-ups) and revoking them (refunds, penalties).
+
+## Methods
+
+### getBalance()
+
+Retrieve a customer's balance for a specific currency.
+
+```typescript
+const balance = await revstack.wallets.getBalance(customerId, currency);
+```
+
+<ParamField path="customerId" type="string" required>
+  The customer whose balance to query.
+  
+  **Example:** `"usr_abc123"`
+</ParamField>
+
+<ParamField path="currency" type="string" required>
+  ISO 4217 currency code.
+  
+  **Example:** `"USD"`, `"EUR"`, `"GBP"`
+</ParamField>
+
+<ResponseField name="balance" type="BalanceResponse">
+  The balance response.
+  
+  <Expandable title="properties">
+    <ResponseField name="currency" type="string">
+      ISO 4217 currency code.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number">
+      Current balance amount.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const { amount, currency } = await revstack.wallets.getBalance(
+  "usr_abc123",
+  "USD"
+);
+
+console.log(`Balance: ${amount} ${currency}`);
+```
+
+---
+
+### listBalances()
+
+List all balances across all currencies for a customer.
+
+```typescript
+const balances = await revstack.wallets.listBalances(customerId);
+```
+
+<ParamField path="customerId" type="string" required>
+  The customer whose balances to list.
+  
+  **Example:** `"usr_abc123"`
+</ParamField>
+
+<ResponseField name="balances" type="BalanceResponse[]">
+  Array of balance responses (one per currency).
+</ResponseField>
+
+**Example:**
+
+```typescript
+const balances = await revstack.wallets.listBalances("usr_abc123");
+
+for (const balance of balances) {
+  console.log(`${balance.currency}: ${balance.amount}`);
+}
+```
+
+---
+
+### grantBalance()
+
+Grant (add) credit to a customer's wallet.
+
+```typescript
+const balance = await revstack.wallets.grantBalance(params);
+```
+
+<ParamField path="params" type="GrantBalanceParams" required>
+  Grant parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string" required>
+      The customer to grant balance to.
+    </ParamField>
+    
+    <ParamField path="currency" type="string" required>
+      ISO 4217 currency code.
+    </ParamField>
+    
+    <ParamField path="amount" type="number" required>
+      Amount to grant (positive number).
+      
+      **Example:** `10.00`
+    </ParamField>
+    
+    <ParamField path="description" type="string">
+      Optional description for the transaction.
+      
+      **Example:** `"Welcome bonus"`, `"Referral credit"`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="balance" type="BalanceResponse">
+  The updated balance after the grant.
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Grant a welcome bonus
+const balance = await revstack.wallets.grantBalance({
+  customerId: "usr_abc123",
+  currency: "USD",
+  amount: 10.00,
+  description: "Welcome bonus",
+});
+
+console.log(`New balance: ${balance.amount}`);
+```
+
+---
+
+### revokeBalance()
+
+Revoke (deduct) credit from a customer's wallet. Used for manual deductions, penalties, or credit refunds.
+
+```typescript
+const balance = await revstack.wallets.revokeBalance(params);
+```
+
+<ParamField path="params" type="RevokeBalanceParams" required>
+  Revoke parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string" required>
+      The customer to deduct balance from.
+    </ParamField>
+    
+    <ParamField path="currency" type="string" required>
+      ISO 4217 currency code.
+    </ParamField>
+    
+    <ParamField path="amount" type="number" required>
+      Amount to deduct (positive number).
+    </ParamField>
+    
+    <ParamField path="reason" type="string">
+      Audit reason for the deduction.
+      
+      **Example:** `"refund"`, `"penalty"`, `"adjustment"`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="balance" type="BalanceResponse">
+  The updated balance after the deduction.
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Deduct credits for a refund
+const balance = await revstack.wallets.revokeBalance({
+  customerId: "usr_abc123",
+  currency: "USD",
+  amount: 5.00,
+  reason: "refund",
+});
+
+console.log(`Remaining balance: ${balance.amount}`);
+```
+
+## Common Use Cases
+
+### Welcome Bonus
+
+```typescript
+// Grant credits to new customers
+async function grantWelcomeBonus(customerId: string) {
+  await revstack.wallets.grantBalance({
+    customerId,
+    currency: "USD",
+    amount: 10.00,
+    description: "Welcome bonus - $10 credit",
+  });
+}
+```
+
+### Referral Program
+
+```typescript
+// Grant credits for successful referrals
+async function grantReferralCredit(
+  referrerId: string,
+  referredId: string
+) {
+  // Credit the referrer
+  await revstack.wallets.grantBalance({
+    customerId: referrerId,
+    currency: "USD",
+    amount: 15.00,
+    description: "Referral bonus",
+  });
+  
+  // Credit the referred user
+  await revstack.wallets.grantBalance({
+    customerId: referredId,
+    currency: "USD",
+    amount: 10.00,
+    description: "Referral welcome credit",
+  });
+}
+```
+
+### Manual Top-Up
+
+```typescript
+// Allow customers to purchase credits
+async function purchaseCredits(
+  customerId: string,
+  amount: number,
+  paymentIntentId: string
+) {
+  // After successful payment processing
+  await revstack.wallets.grantBalance({
+    customerId,
+    currency: "USD",
+    amount,
+    description: `Credit purchase (${paymentIntentId})`,
+  });
+}
+```
+
+### Credit Refunds
+
+```typescript
+// Process credit refunds
+async function refundCredits(
+  customerId: string,
+  amount: number,
+  orderId: string
+) {
+  await revstack.wallets.revokeBalance({
+    customerId,
+    currency: "USD",
+    amount,
+    reason: `Refund for order ${orderId}`,
+  });
+}
+```
+
+### Display Balance in UI
+
+```typescript
+// Show customer's available credits
+async function getCustomerCredits(customerId: string) {
+  const balances = await revstack.wallets.listBalances(customerId);
+  
+  return balances.map(b => ({
+    currency: b.currency,
+    amount: b.amount,
+    formatted: `${b.currency} ${b.amount.toFixed(2)}`,
+  }));
+}
+```
+
+### Credit Expiration
+
+```typescript
+// Revoke expired credits
+async function expireOldCredits(
+  customerId: string,
+  amount: number
+) {
+  await revstack.wallets.revokeBalance({
+    customerId,
+    currency: "USD",
+    amount,
+    reason: "credit_expiration",
+  });
+}
+```

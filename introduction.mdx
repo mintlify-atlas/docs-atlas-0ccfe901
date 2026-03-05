@@ -1,0 +1,297 @@
+---
+title: Introduction
+description: Billing infrastructure for SaaS that lets you ship features instead of billing plumbing
+---
+
+## What is Revstack?
+
+Revstack is a billing infrastructure platform for SaaS companies. Define your plans and entitlements in code, connect a payment provider, and let the platform handle entitlement checks, usage tracking, subscription lifecycle, and webhook orchestration.
+
+Think of it as Stripe for billing logic — you get the infrastructure without building it yourself.
+
+## Core Capabilities
+
+<CardGroup cols={2}>
+  <Card title="Entitlements" icon="shield-check">
+    Check feature access in real-time with `entitlements.check()`. Works with boolean flags, numeric limits, and metered usage.
+  </Card>
+  <Card title="Usage Metering" icon="chart-line">
+    Track consumption of metered features (API calls, AI tokens, storage) with automatic quota enforcement.
+  </Card>
+  <Card title="Subscriptions" icon="credit-card">
+    Create, upgrade, downgrade, and cancel subscriptions with lifecycle management handled for you.
+  </Card>
+  <Card title="Provider Abstraction" icon="plug">
+    Connect Stripe, Polar, or other payment providers. Switch providers without rewriting your app.
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+Revstack operates across two planes:
+
+### Data Plane (Runtime Operations)
+
+The data plane handles your daily backend operations:
+
+- **Entitlement Checks** — `revstack.entitlements.check()` validates feature access
+- **Usage Reporting** — `revstack.usage.report()` tracks metered consumption
+- **Subscription Management** — Create, modify, and cancel subscriptions
+- **Customer Records** — Manage end-user data and billing profiles
+- **Webhooks** — Verify signatures and handle provider events
+
+This is what your application calls at runtime to gate features, track usage, and respond to subscription changes.
+
+### Control Plane (Infrastructure Management)
+
+The control plane manages your billing infrastructure:
+
+- **Billing as Code** — Define plans, features, and pricing in `revstack.config.ts`
+- **Plan CRUD** — Programmatically manage plans via `revstack.admin.plans`
+- **Integrations** — Connect and configure payment providers
+- **Environments** — Manage dev/staging/production deployments
+
+Use the CLI (`revstack push`) or admin API to sync your billing configuration to Revstack Cloud.
+
+## How It Works
+
+<Steps>
+  <Step title="Define Your Billing Config">
+    Create a `revstack.config.ts` file with your features, plans, and pricing:
+
+    ```typescript revstack.config.ts
+    import { defineConfig, defineFeature, definePlan } from "@revstackhq/core";
+
+    const features = {
+      "api-calls": defineFeature({
+        name: "API Calls",
+        type: "metered",
+        unit_type: "requests",
+      }),
+      "team-seats": defineFeature({
+        name: "Team Seats",
+        type: "static",
+        unit_type: "count",
+      }),
+    };
+
+    export default defineConfig({
+      features,
+      plans: {
+        starter: definePlan<typeof features>({
+          name: "Starter",
+          type: "paid",
+          is_public: true,
+          prices: [
+            {
+              amount: 1900,
+              currency: "USD",
+              billing_interval: "monthly",
+            },
+          ],
+          features: {
+            "api-calls": { value_limit: 10000, reset_period: "monthly" },
+            "team-seats": { value_limit: 3, is_hard_limit: true },
+          },
+        }),
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Install the SDK">
+    Choose the SDK for your runtime:
+
+    ```bash
+    # Server-side (Node.js)
+    npm install @revstackhq/node
+
+    # React
+    npm install @revstackhq/react @revstackhq/browser
+
+    # Next.js
+    npm install @revstackhq/next
+
+    # Browser (vanilla JS)
+    npm install @revstackhq/browser
+    ```
+  </Step>
+
+  <Step title="Check Entitlements">
+    Gate features behind entitlement checks:
+
+    ```typescript
+    import { Revstack } from "@revstackhq/node";
+
+    const revstack = new Revstack({
+      secretKey: process.env.REVSTACK_SECRET_KEY!,
+    });
+
+    const { allowed, reason } = await revstack.entitlements.check(
+      "cus_abc123",
+      "api-calls"
+    );
+
+    if (!allowed) {
+      return res.status(403).json({ error: reason });
+    }
+    ```
+  </Step>
+
+  <Step title="Report Usage">
+    Track consumption of metered features:
+
+    ```typescript
+    await revstack.usage.report({
+      customer_id: "cus_abc123",
+      feature_id: "api-calls",
+      delta: 1,
+    });
+    ```
+  </Step>
+</Steps>
+
+## Key Features
+
+### Type-Safe Configuration
+
+Define your billing config with full TypeScript inference. The `definePlan<typeof features>` pattern ensures you only reference features that exist:
+
+```typescript
+// ✅ Compiles — "api-calls" exists in features
+definePlan<typeof features>({
+  features: { "api-calls": { value_limit: 10000 } }
+});
+
+// ❌ Compile error — "api-callz" is a typo
+definePlan<typeof features>({
+  features: { "api-callz": { value_limit: 10000 } }
+});
+```
+
+### Flexible Entitlement Types
+
+Support all common billing patterns:
+
+- **Boolean** — On/off flags (e.g., "SSO Access", "Custom Branding")
+- **Static** — Fixed limits per plan (e.g., "5 Team Seats")
+- **Metered** — Usage-based with automatic resets (e.g., "10,000 API calls per month")
+
+### Payment Provider Abstraction
+
+The provider gateway lets you:
+
+- Switch payment providers without code changes
+- Use multiple providers simultaneously (e.g., Stripe for US, Polar for Europe)
+- Test billing logic without real payment accounts
+
+### Multi-Environment Support
+
+Manage separate configurations for development, staging, and production. Deploy billing changes safely with preview environments.
+
+## Package Ecosystem
+
+Revstack is distributed as a monorepo with specialized packages:
+
+### Client SDKs (MIT)
+
+| Package | Description |
+|---------|-------------|
+| `@revstackhq/node` | Server-side SDK for Node.js |
+| `@revstackhq/react` | React hooks and context |
+| `@revstackhq/next` | Next.js integration with SSR support |
+| `@revstackhq/browser` | Vanilla TypeScript browser client |
+| `@revstackhq/auth` | JWT verification for Auth0, Clerk, Supabase, etc. |
+| `@revstackhq/cli` | Command-line tool for config management |
+
+### Core Infrastructure (FSL-1.1-MIT)
+
+| Package | Description |
+|---------|-------------|
+| `@revstackhq/core` | Entitlement engine and config authoring |
+| `@revstackhq/providers-core` | Provider gateway interfaces |
+| `@revstackhq/provider-stripe` | Stripe provider implementation |
+
+<Note>
+  Client SDKs are MIT-licensed for unrestricted use. Core infrastructure uses the [Functional Source License](https://fsl.software/) and converts to MIT after two years.
+</Note>
+
+## Use Cases
+
+### SaaS Feature Gating
+
+```typescript
+// Gate a premium feature behind a plan check
+const { allowed } = await revstack.entitlements.check(userId, "advanced-analytics");
+
+if (!allowed) {
+  return <UpgradeModal />;
+}
+```
+
+### API Rate Limiting
+
+```typescript
+// Enforce per-customer API quotas
+const { allowed, limit, usage } = await revstack.entitlements.check(
+  customerId,
+  "api-calls"
+);
+
+if (!allowed) {
+  return res.status(429).json({
+    error: "Rate limit exceeded",
+    limit,
+    usage,
+  });
+}
+
+await revstack.usage.report({
+  customer_id: customerId,
+  feature_id: "api-calls",
+  delta: 1,
+});
+```
+
+### AI Token Metering
+
+```typescript
+// Track AI usage with token-level precision
+await revstack.usage.report({
+  customer_id: userId,
+  feature_id: "ai-tokens",
+  delta: response.usage.total_tokens,
+});
+```
+
+### Team Seat Management
+
+```typescript
+// Enforce hard limits on team size
+const { allowed, limit, usage } = await revstack.entitlements.check(
+  organizationId,
+  "team-seats",
+  { amount: 1 } // Check if one more seat can be added
+);
+
+if (!allowed) {
+  return { error: `Your plan includes ${limit} seats. Upgrade to add more.` };
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first billing-enabled app in 5 minutes
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed setup instructions for all SDKs
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/node/client">
+    Complete SDK documentation
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/billing-as-code">
+    Learn about billing as code and entitlements
+  </Card>
+</CardGroup>

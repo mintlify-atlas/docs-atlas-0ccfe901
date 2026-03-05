@@ -1,0 +1,716 @@
+---
+title: 'Custom Providers'
+description: 'Build custom payment provider integrations for Revstack'
+icon: 'code'
+---
+
+## Overview
+
+Revstack's provider system is fully extensible. You can build custom providers to integrate with any payment processor, billing system, or financial API by implementing the standard `IProvider` interface.
+
+## Why Build a Custom Provider?
+
+Custom providers enable you to:
+
+- Integrate with regional or niche payment processors not officially supported
+- Connect to internal billing systems or legacy payment infrastructure
+- Add custom business logic or data transformations
+- Implement provider-specific features not available in standard implementations
+
+## Architecture Overview
+
+A provider consists of three main components:
+
+1. **Manifest** - Declares capabilities, configuration schema, and metadata
+2. **Provider Class** - Implements the `IProvider` interface
+3. **API Client** - Handles communication with the external payment API
+
+```
+┌─────────────────────────────────────┐
+│         Your Provider               │
+│  ┌───────────────────────────────┐  │
+│  │       Manifest                │  │  Metadata & Capabilities
+│  │  (capabilities, config, etc)  │  │
+│  └───────────────────────────────┘  │
+│  ┌───────────────────────────────┐  │
+│  │     Provider Class            │  │  Implements IProvider
+│  │  (implements all methods)     │  │
+│  └───────────────────────────────┘  │
+│  ┌───────────────────────────────┐  │
+│  │      API Client               │  │  External API calls
+│  │  (HTTP, SDK, etc)             │  │
+│  └───────────────────────────────┘  │
+└─────────────────────────────────────┘
+```
+
+## Step 1: Create the Manifest
+
+Start by defining your provider's manifest. This describes what your provider can do:
+
+```typescript
+import { ProviderManifest, ProviderCategory } from '@revstackhq/providers-core';
+
+export const manifest: ProviderManifest = {
+  // Identity
+  slug: 'my-provider',
+  name: 'My Payment Provider',
+  version: '1.0.0',
+  status: 'experimental',
+  
+  // Classification
+  categories: [ProviderCategory.Card],
+  description: 'Custom payment provider for Example Payment Gateway',
+  author: 'Your Company',
+  
+  // Geographic support
+  localization: {
+    merchantCountries: ['US', 'CA'],
+    customerCountries: ['*'],  // Accept globally
+    processingCurrencies: ['USD', 'CAD'],
+    settlementCurrencies: ['USD']
+  },
+  
+  // Compliance
+  compliance: {
+    actsAsMoR: false,
+    calculatesTaxes: false,
+    pciLevel: 'Level 1'
+  },
+  
+  // Payment methods
+  supportedPaymentMethods: ['card'],
+  
+  // Capabilities - what operations your provider supports
+  capabilities: {
+    checkout: {
+      supported: true,
+      strategy: 'redirect'  // or 'native_sdk' or 'sdui'
+    },
+    payments: {
+      supported: true,
+      features: {
+        refunds: true,
+        partialRefunds: false,
+        capture: true,
+        disputes: false
+      }
+    },
+    subscriptions: {
+      supported: false,  // Set to true if you support subscriptions
+      mode: 'native',
+      features: {
+        pause: false,
+        resume: false,
+        cancellation: false
+      }
+    },
+    customers: {
+      supported: true,
+      features: {
+        create: true,
+        update: true,
+        delete: false
+      }
+    },
+    webhooks: {
+      supported: true,
+      verification: 'signature'  // or 'secret' or 'none'
+    },
+    catalog: {
+      supported: true,
+      strategy: 'inline'  // or 'pre_created'
+    }
+  },
+  
+  // Configuration schema for setup UI
+  setup: {
+    request: {
+      apiKey: {
+        label: 'API Key',
+        type: 'password',
+        secure: true,
+        required: true,
+        description: 'Your provider API key',
+        pattern: '^[a-zA-Z0-9_-]+$',
+        errorMessage: 'Invalid API key format'
+      },
+      merchantId: {
+        label: 'Merchant ID',
+        type: 'text',
+        secure: false,
+        required: true,
+        description: 'Your merchant identifier'
+      }
+    },
+    response: {
+      webhookSecret: {
+        secure: true,
+        description: 'Webhook signing secret'
+      }
+    }
+  },
+  
+  // System characteristics
+  systemTraits: {
+    hasNativeIdempotency: false,  // Revstack will handle retries
+    sandboxStrategy: 'separate_credentials',
+    rateLimits: {
+      requestsPerSecond: 50
+    }
+  },
+  
+  // Technical requirements
+  engine: {
+    revstack: '^1.0.0',
+    node: '>=18.0.0'
+  },
+  
+  // Visual assets
+  media: {
+    icon: 'https://your-cdn.com/icon.svg',
+    logo: 'https://your-cdn.com/logo.svg'
+  },
+  
+  // Links
+  links: {
+    dashboard: 'https://dashboard.your-provider.com',
+    documentation: 'https://docs.your-provider.com',
+    support: 'https://support.your-provider.com'
+  },
+  
+  // Pagination strategy
+  paginationType: 'cursor',  // or 'page'
+  
+  sandboxAvailable: true,
+  hidden: false
+};
+```
+
+<Info>
+  See [providers/core/src/manifest.ts:223](~/workspace/source/packages/providers/core/src/manifest.ts:223) for the complete `ProviderManifest` schema.
+</Info>
+
+## Step 2: Implement the Provider Class
+
+Create a class that extends `BaseProvider` and implements the required methods:
+
+```typescript
+import {
+  BaseProvider,
+  ProviderContext,
+  InstallInput,
+  InstallResult,
+  UninstallInput,
+  AsyncActionResult,
+  CreatePaymentInput,
+  RevstackEvent,
+  WebhookResponse,
+  RevstackErrorCode
+} from '@revstackhq/providers-core';
+import { manifest } from './manifest';
+import { createApiClient } from './api/client';
+
+export class MyProvider extends BaseProvider {
+  static manifest = manifest;
+  manifest = manifest;
+
+  // Installation hook - called when provider is connected
+  async onInstall(
+    ctx: ProviderContext,
+    input: InstallInput
+  ): Promise<AsyncActionResult<InstallResult>> {
+    // Validate credentials
+    const client = createApiClient(input.config);
+    const isValid = await client.validateCredentials();
+    
+    if (!isValid) {
+      return {
+        data: { success: false },
+        status: 'failed',
+        error: {
+          code: RevstackErrorCode.InvalidCredentials,
+          message: 'Invalid API credentials'
+        }
+      };
+    }
+    
+    // Setup webhooks if URL provided
+    let webhookData = {};
+    if (input.webhookUrl) {
+      const webhook = await client.createWebhook(input.webhookUrl);
+      webhookData = {
+        webhookId: webhook.id,
+        webhookSecret: webhook.secret
+      };
+    }
+    
+    // Return success with config to store
+    return {
+      data: {
+        success: true,
+        data: {
+          ...input.config,
+          ...webhookData,
+          _providerVersion: manifest.version
+        }
+      },
+      status: 'success'
+    };
+  }
+
+  // Cleanup hook - called when provider is disconnected
+  async onUninstall(
+    ctx: ProviderContext,
+    input: UninstallInput
+  ): Promise<AsyncActionResult<boolean>> {
+    const client = createApiClient(ctx.config);
+    
+    if (input.data.webhookId) {
+      try {
+        await client.deleteWebhook(input.data.webhookId);
+      } catch (e) {
+        console.warn('Failed to cleanup webhook:', e);
+      }
+    }
+    
+    return {
+      data: true,
+      status: 'success'
+    };
+  }
+
+  // Payment creation
+  async createPayment(
+    ctx: ProviderContext,
+    input: CreatePaymentInput
+  ): Promise<AsyncActionResult<string>> {
+    const client = createApiClient(ctx.config);
+    
+    try {
+      const payment = await client.createPayment({
+        amount: input.amount,
+        currency: input.currency,
+        customerId: input.customer.id,
+        paymentMethod: input.paymentMethod,
+        description: input.description,
+        metadata: input.metadata
+      });
+      
+      return {
+        data: payment.id,
+        status: 'success'
+      };
+    } catch (error: any) {
+      return {
+        data: null,
+        status: 'failed',
+        error: {
+          code: this.mapErrorCode(error),
+          message: error.message,
+          details: error.details
+        }
+      };
+    }
+  }
+
+  // Webhook signature verification
+  async verifyWebhookSignature(
+    ctx: ProviderContext,
+    payload: string | Buffer,
+    headers: Record<string, string | string[] | undefined>,
+    secret: string
+  ): Promise<AsyncActionResult<boolean>> {
+    const client = createApiClient(ctx.config);
+    
+    try {
+      const signature = headers['x-provider-signature'] as string;
+      const isValid = await client.verifyWebhookSignature(
+        payload,
+        signature,
+        secret
+      );
+      
+      return {
+        data: isValid,
+        status: 'success'
+      };
+    } catch (error: any) {
+      return {
+        data: false,
+        status: 'failed',
+        error: {
+          code: RevstackErrorCode.InvalidSignature,
+          message: 'Webhook signature verification failed'
+        }
+      };
+    }
+  }
+
+  // Parse webhook event into Revstack format
+  async parseWebhookEvent(
+    ctx: ProviderContext,
+    payload: any
+  ): Promise<AsyncActionResult<RevstackEvent | null>> {
+    // Map provider event to Revstack event type
+    const eventType = this.mapEventType(payload.type);
+    
+    if (!eventType) {
+      // Unknown event type - return null to ignore
+      return { data: null, status: 'success' };
+    }
+    
+    return {
+      data: {
+        type: eventType,
+        data: payload.data,
+        providerId: payload.id,
+        timestamp: new Date(payload.created_at)
+      },
+      status: 'success'
+    };
+  }
+
+  // Webhook response format
+  async getWebhookResponse(): Promise<AsyncActionResult<WebhookResponse>> {
+    return {
+      data: {
+        statusCode: 200,
+        body: { received: true }
+      },
+      status: 'success'
+    };
+  }
+  
+  // Helper to map provider errors to Revstack error codes
+  private mapErrorCode(error: any): RevstackErrorCode {
+    switch (error.code) {
+      case 'invalid_credentials':
+        return RevstackErrorCode.InvalidCredentials;
+      case 'insufficient_funds':
+        return RevstackErrorCode.InsufficientFunds;
+      case 'not_found':
+        return RevstackErrorCode.ResourceNotFound;
+      default:
+        return RevstackErrorCode.UnknownError;
+    }
+  }
+  
+  // Helper to map provider events to Revstack event types
+  private mapEventType(providerType: string): string | null {
+    const eventMap: Record<string, string> = {
+      'payment.completed': 'payment.succeeded',
+      'payment.failed': 'payment.failed',
+      'subscription.started': 'subscription.created',
+      // Add more mappings...
+    };
+    return eventMap[providerType] || null;
+  }
+}
+```
+
+<Info>
+  See [providers/official/stripe/src/provider.ts:45](~/workspace/source/packages/providers/official/stripe/src/provider.ts:45) for a complete reference implementation.
+</Info>
+
+## Step 3: Implement Feature Interfaces
+
+If your provider supports additional features, implement the corresponding interfaces:
+
+### Customer Management
+
+```typescript
+import { ICustomerFeature, CreateCustomerInput, UpdateCustomerInput } from '@revstackhq/providers-core';
+
+// In your provider class:
+async createCustomer(
+  ctx: ProviderContext,
+  input: CreateCustomerInput
+): Promise<AsyncActionResult<string>> {
+  const client = createApiClient(ctx.config);
+  
+  const customer = await client.createCustomer({
+    email: input.email,
+    name: input.name,
+    metadata: input.metadata
+  });
+  
+  return {
+    data: customer.id,
+    status: 'success'
+  };
+}
+
+async updateCustomer(
+  ctx: ProviderContext,
+  input: UpdateCustomerInput
+): Promise<AsyncActionResult<string>> {
+  const client = createApiClient(ctx.config);
+  
+  await client.updateCustomer(input.id, {
+    email: input.email,
+    name: input.name,
+    metadata: input.metadata
+  });
+  
+  return {
+    data: input.id,
+    status: 'success'
+  };
+}
+```
+
+### Subscription Management
+
+```typescript
+import { ISubscriptionFeature, CreateSubscriptionInput } from '@revstackhq/providers-core';
+
+// In your provider class:
+async createSubscription(
+  ctx: ProviderContext,
+  input: CreateSubscriptionInput
+): Promise<AsyncActionResult<string>> {
+  const client = createApiClient(ctx.config);
+  
+  const subscription = await client.createSubscription({
+    customerId: input.customer.id,
+    items: input.items,
+    trial: input.trial,
+    metadata: input.metadata
+  });
+  
+  return {
+    data: subscription.id,
+    status: 'success'
+  };
+}
+
+async cancelSubscription(
+  ctx: ProviderContext,
+  input: CancelSubscriptionInput
+): Promise<AsyncActionResult<string>> {
+  const client = createApiClient(ctx.config);
+  
+  await client.cancelSubscription(input.id, {
+    immediately: input.immediately ?? false
+  });
+  
+  return {
+    data: input.id,
+    status: 'success'
+  };
+}
+```
+
+<Info>
+  See [providers/core/src/interfaces/features/](~/workspace/source/packages/providers/core/src/interfaces/features/) for all available feature interfaces.
+</Info>
+
+## Step 4: Create the API Client
+
+Implement a client to communicate with the external payment API:
+
+```typescript
+import axios, { AxiosInstance } from 'axios';
+
+export function createApiClient(config: Record<string, any>) {
+  const client = axios.create({
+    baseURL: 'https://api.your-provider.com/v1',
+    headers: {
+      'Authorization': `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  
+  return {
+    async validateCredentials(): Promise<boolean> {
+      try {
+        await client.get('/account');
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    
+    async createPayment(data: any) {
+      const response = await client.post('/payments', data);
+      return response.data;
+    },
+    
+    async createWebhook(url: string) {
+      const response = await client.post('/webhooks', {
+        url,
+        events: ['payment.*', 'subscription.*']
+      });
+      return response.data;
+    },
+    
+    async deleteWebhook(id: string) {
+      await client.delete(`/webhooks/${id}`);
+    },
+    
+    async verifyWebhookSignature(
+      payload: string | Buffer,
+      signature: string,
+      secret: string
+    ): Promise<boolean> {
+      // Implement signature verification logic
+      const crypto = require('crypto');
+      const computedSignature = crypto
+        .createHmac('sha256', secret)
+        .update(payload)
+        .digest('hex');
+      return signature === computedSignature;
+    }
+  };
+}
+```
+
+## Step 5: Register Your Provider
+
+Register your custom provider with Revstack:
+
+```typescript
+import { registerProvider } from '@revstackhq/providers-registry';
+import { MyProvider } from './my-provider';
+
+registerProvider('my-provider', async () => {
+  return { default: MyProvider, manifest: MyProvider.manifest };
+});
+```
+
+<Info>
+  See [providers/registry/src/registry.ts:6](~/workspace/source/packages/providers/registry/src/registry.ts:6) for the registration API.
+</Info>
+
+## Testing Your Provider
+
+Create comprehensive tests for your provider:
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { MyProvider } from './my-provider';
+
+describe('MyProvider', () => {
+  const provider = new MyProvider();
+  
+  it('should validate credentials on install', async () => {
+    const result = await provider.onInstall(
+      { config: {}, environment: 'test' },
+      { config: { apiKey: 'test_key' } }
+    );
+    
+    expect(result.status).toBe('success');
+    expect(result.data?.success).toBe(true);
+  });
+  
+  it('should create a payment', async () => {
+    const result = await provider.createPayment(
+      {
+        config: { apiKey: 'test_key' },
+        environment: 'test'
+      },
+      {
+        amount: 1000,
+        currency: 'USD',
+        customer: { id: 'cus_123' },
+        paymentMethod: 'pm_test'
+      }
+    );
+    
+    expect(result.status).toBe('success');
+    expect(result.data).toBeTruthy();
+  });
+});
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Error Handling">
+    - Always return `AsyncActionResult` with proper error codes
+    - Map provider-specific errors to Revstack error codes
+    - Include helpful error messages and details
+    - Log errors for debugging but don't expose sensitive data
+  </Accordion>
+  
+  <Accordion title="Security">
+    - Never log or expose sensitive credentials
+    - Mark sensitive fields as `secure: true` in the manifest
+    - Implement proper webhook signature verification
+    - Use HTTPS for all API communication
+  </Accordion>
+  
+  <Accordion title="Performance">
+    - Implement proper rate limiting per manifest configuration
+    - Use connection pooling for API clients
+    - Cache configuration data when appropriate
+    - Support pagination for list operations
+  </Accordion>
+  
+  <Accordion title="Compatibility">
+    - Follow semantic versioning for your provider
+    - Mark breaking changes with `breaking: true` in releases
+    - Test against multiple Revstack core versions
+    - Document provider-specific limitations
+  </Accordion>
+</AccordionGroup>
+
+## Not Implemented Features
+
+For features your provider doesn't support, return a `NotImplemented` error:
+
+```typescript
+async someUnsupportedMethod(
+  ctx: ProviderContext,
+  input: any
+): Promise<AsyncActionResult<any>> {
+  return {
+    data: null,
+    status: 'failed',
+    error: {
+      code: RevstackErrorCode.NotImplemented,
+      message: `Provider '${this.manifest.slug}' does not support this operation`
+    }
+  };
+}
+```
+
+Make sure your manifest capabilities accurately reflect what's implemented.
+
+## Example: Complete Provider
+
+For a complete working example, see the official Stripe provider:
+
+- [Manifest](~/workspace/source/packages/providers/official/stripe/src/manifest.ts)
+- [Provider Class](~/workspace/source/packages/providers/official/stripe/src/provider.ts)
+- [API Client](~/workspace/source/packages/providers/official/stripe/src/api/v1/client.ts)
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="IProvider Interface" icon="file-code" href="/api/providers/core">
+    Complete interface documentation
+  </Card>
+  <Card title="Provider Registry" icon="brackets-curly" href="/api/providers/registry">
+    All provider types and interfaces
+  </Card>
+  <Card title="Stripe Provider" icon="stripe" href="/providers/stripe">
+    Reference implementation
+  </Card>
+  <Card title="Provider Overview" icon="triangle-exclamation" href="/providers/overview">
+    Standard provider reference
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+After building your provider:
+
+1. Write comprehensive tests
+2. Document provider-specific configuration and features
+3. Submit to the Revstack provider marketplace (optional)
+4. Monitor performance and error rates in production
+
+<Card title="Provider Overview" icon="arrow-left" href="/providers/overview">
+  Back to provider architecture overview
+</Card>

@@ -1,0 +1,467 @@
+---
+title: 'React SDK'
+description: 'React hooks and components for client-side entitlement checks'
+icon: 'react'
+---
+
+The React SDK provides hooks and components for checking entitlements on the client side, with automatic reactivity and SSR support.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @revstackhq/react
+```
+
+```bash yarn
+yarn add @revstackhq/react
+```
+
+```bash pnpm
+pnpm add @revstackhq/react
+```
+</CodeGroup>
+
+## Quick Start
+
+### 1. Wrap your app with RevstackProvider
+
+```tsx
+import { RevstackProvider } from "@revstackhq/react";
+
+function App() {
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.NEXT_PUBLIC_REVSTACK_PUBLIC_KEY!,
+        getToken: async () => {
+          // Return the current user's JWT, or null if unauthenticated
+          const session = await getSession();
+          return session?.token ?? null;
+        },
+      }}
+    >
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+
+<Warning>
+Use your **public key** for client-side SDKs. Never expose your secret key in the browser.
+</Warning>
+
+### 2. Check entitlements with hooks
+
+```tsx
+import { useEntitlement } from "@revstackhq/react";
+
+function PremiumFeature() {
+  const feature = useEntitlement("premium-feature");
+
+  if (!feature.hasAccess) {
+    return <PaywallBanner />;
+  }
+
+  return <PremiumContent />;
+}
+```
+
+## Configuration
+
+### RevstackProvider Props
+
+```typescript
+interface RevstackConfig {
+  /** Project public key from Revstack Dashboard */
+  publicKey: string;
+
+  /** Function that returns the current user's JWT token */
+  getToken: () => Promise<string | null>;
+
+  /** API base URL (optional) */
+  apiUrl?: string;
+
+  /** Custom guest ID resolver — overrides fingerprinting (optional) */
+  getGuestId?: () => Promise<string>;
+
+  /** Disable browser fingerprinting (optional) */
+  disableFingerprint?: boolean;
+}
+```
+
+### Authentication Integration
+
+The `getToken` function should return your user's JWT from your auth provider:
+
+<CodeGroup>
+```tsx Clerk
+import { useAuth } from "@clerk/nextjs";
+import { RevstackProvider } from "@revstackhq/react";
+
+function App() {
+  const { getToken } = useAuth();
+
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.NEXT_PUBLIC_REVSTACK_PUBLIC_KEY!,
+        getToken: async () => {
+          const token = await getToken();
+          return token ?? null;
+        },
+      }}
+    >
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+
+```tsx NextAuth
+import { useSession } from "next-auth/react";
+import { RevstackProvider } from "@revstackhq/react";
+
+function App() {
+  const { data: session } = useSession();
+
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.NEXT_PUBLIC_REVSTACK_PUBLIC_KEY!,
+        getToken: async () => session?.user?.token ?? null,
+      }}
+    >
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+
+```tsx Supabase
+import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { RevstackProvider } from "@revstackhq/react";
+
+function App() {
+  const supabase = createClientComponentClient();
+
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.NEXT_PUBLIC_REVSTACK_PUBLIC_KEY!,
+        getToken: async () => {
+          const { data } = await supabase.auth.getSession();
+          return data.session?.access_token ?? null;
+        },
+      }}
+    >
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+</CodeGroup>
+
+## Hooks
+
+### useEntitlement
+
+Subscribe to entitlement changes for a specific feature.
+
+```tsx
+import { useEntitlement } from "@revstackhq/react";
+
+function FeatureGate() {
+  const feature = useEntitlement("advanced-analytics");
+
+  return (
+    <div>
+      <p>Access: {feature.hasAccess ? "Granted" : "Denied"}</p>
+      {feature.value && <p>Limit: {feature.value}</p>}
+    </div>
+  );
+}
+```
+
+**Returns:**
+
+```typescript
+interface Entitlement {
+  /** Feature key */
+  key: string;
+  /** Whether the user has access */
+  hasAccess: boolean;
+  /** Optional value (limits, tier names, etc.) */
+  value?: string | number | boolean;
+}
+```
+
+<Info>
+`useEntitlement` is **reactive** — it automatically re-renders when entitlements change.
+</Info>
+
+### useRevstack
+
+Access the raw RevstackClient instance.
+
+```tsx
+import { useRevstack } from "@revstackhq/react";
+
+function BillingPortalButton() {
+  const revstack = useRevstack();
+
+  const handleOpenPortal = async () => {
+    await revstack.openBillingPortal({
+      returnUrl: window.location.href,
+    });
+  };
+
+  return <button onClick={handleOpenPortal}>Manage Billing</button>;
+}
+```
+
+**Client Methods:**
+
+```typescript
+interface RevstackClient {
+  /** Check if client is initialized */
+  isInitialized: boolean;
+
+  /** Check if init() has completed (success or failure) */
+  isReady: boolean;
+
+  /** Initialize the client (called automatically by provider) */
+  init(): Promise<void>;
+
+  /** Get entitlement from cache */
+  getEntitlement(key: string): Entitlement;
+
+  /** Check if user has access to a feature */
+  hasAccess(key: string): boolean;
+
+  /** Start a checkout session */
+  startCheckout(params: CheckoutParams): Promise<void>;
+
+  /** Open the billing portal */
+  openBillingPortal(params: BillingPortalParams): Promise<void>;
+}
+```
+
+## Common Patterns
+
+### Feature Gating
+
+Show/hide UI based on entitlements:
+
+```tsx
+import { useEntitlement } from "@revstackhq/react";
+
+function Dashboard() {
+  const analytics = useEntitlement("analytics");
+  const exports = useEntitlement("data-exports");
+
+  return (
+    <div>
+      <h1>Dashboard</h1>
+
+      {analytics.hasAccess && (
+        <section>
+          <h2>Analytics</h2>
+          <AnalyticsCharts />
+        </section>
+      )}
+
+      {exports.hasAccess ? (
+        <ExportButton />
+      ) : (
+        <UpgradePrompt feature="Data Exports" />
+      )}
+    </div>
+  );
+}
+```
+
+### Usage Limits
+
+Display remaining quota from entitlement values:
+
+```tsx
+import { useEntitlement } from "@revstackhq/react";
+
+function ApiUsageWidget() {
+  const apiCalls = useEntitlement("api-calls");
+
+  if (!apiCalls.hasAccess) {
+    return <p>API access not available on your plan</p>;
+  }
+
+  const limit = apiCalls.value as number;
+
+  return (
+    <div>
+      <h3>API Usage</h3>
+      <p>Limit: {limit} calls/month</p>
+      <ProgressBar current={0} max={limit} />
+    </div>
+  );
+}
+```
+
+### Checkout Flow
+
+Start a checkout session and redirect to payment:
+
+```tsx
+import { useRevstack } from "@revstackhq/react";
+
+function PricingCard({ planId }: { planId: string }) {
+  const revstack = useRevstack();
+  const [loading, setLoading] = useState(false);
+
+  const handleSubscribe = async () => {
+    setLoading(true);
+    try {
+      await revstack.startCheckout({
+        planId,
+        successUrl: `${window.location.origin}/dashboard?success=true`,
+        cancelUrl: `${window.location.origin}/pricing`,
+      });
+      // User is redirected to checkout
+    } catch (error) {
+      console.error("Checkout failed:", error);
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button onClick={handleSubscribe} disabled={loading}>
+      {loading ? "Loading..." : "Subscribe"}
+    </button>
+  );
+}
+```
+
+### Billing Portal
+
+Let users manage their subscription:
+
+```tsx
+import { useRevstack } from "@revstackhq/react";
+
+function SettingsPage() {
+  const revstack = useRevstack();
+
+  const handleManageBilling = async () => {
+    await revstack.openBillingPortal({
+      returnUrl: window.location.href,
+    });
+    // User is redirected to billing portal
+  };
+
+  return (
+    <div>
+      <h2>Billing Settings</h2>
+      <button onClick={handleManageBilling}>
+        Manage Subscription
+      </button>
+    </div>
+  );
+}
+```
+
+### Loading States
+
+Handle initialization loading:
+
+```tsx
+import { useRevstack } from "@revstackhq/react";
+
+function App() {
+  const revstack = useRevstack();
+
+  if (!revstack.isReady) {
+    return <LoadingSpinner />;
+  }
+
+  return <Dashboard />;
+}
+```
+
+## SSR Support
+
+The React SDK is **SSR-safe** and works with Next.js, Remix, and other frameworks.
+
+- `useEntitlement` returns `{ key, hasAccess: false }` on the server
+- The provider initializes on mount (client-side only)
+- No hydration mismatches
+
+For server-side entitlement checks, use the [Next.js SDK](/sdks/next) server helpers.
+
+## TypeScript Support
+
+Full type definitions included:
+
+```typescript
+import type {
+  RevstackConfig,
+  Entitlement,
+  CheckoutParams,
+  BillingPortalParams,
+} from "@revstackhq/react";
+```
+
+## Advanced: Custom Guest ID
+
+Override the default browser fingerprinting:
+
+```tsx
+<RevstackProvider
+  config={{
+    publicKey: "pk_...",
+    getToken: async () => token,
+    getGuestId: async () => {
+      // Use your own anonymous user ID
+      return localStorage.getItem("anonymous_user_id")!;
+    },
+  }}
+>
+  <App />
+</RevstackProvider>
+```
+
+## Advanced: Disable Fingerprinting
+
+For privacy-sensitive applications:
+
+```tsx
+<RevstackProvider
+  config={{
+    publicKey: "pk_...",
+    getToken: async () => token,
+    disableFingerprint: true,
+  }}
+>
+  <App />
+</RevstackProvider>
+```
+
+<Warning>
+Disabling fingerprinting means unauthenticated users won't have entitlements tracked.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Next.js SDK" icon="grid" href="/sdks/next">
+    Server and client components for Next.js
+  </Card>
+  <Card title="Browser SDK" icon="browser" href="/sdks/browser">
+    Vanilla JavaScript SDK for any framework
+  </Card>
+  <Card title="Entitlements" icon="key" href="/concepts/entitlements">
+    Learn about feature gating and access control
+  </Card>
+  <Card title="Subscriptions" icon="credit-card" href="/concepts/subscriptions">
+    Build subscription checkout flows
+  </Card>
+</CardGroup>

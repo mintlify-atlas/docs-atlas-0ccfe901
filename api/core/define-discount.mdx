@@ -1,0 +1,323 @@
+---
+title: defineDiscount
+description: Define a discount coupon with full type inference
+---
+
+## Overview
+
+The `defineDiscount()` function defines a discount or coupon code that customers can apply at checkout. It's an identity function that provides type inference and autocomplete while returning the input as-is.
+
+## Function Signature
+
+```typescript
+function defineDiscount<T extends DiscountDef>(config: T): T
+```
+
+### Type Parameters
+
+<ParamField path="T" type="T extends DiscountDef">
+  The discount configuration type. Must extend `DiscountDef`.
+</ParamField>
+
+### Parameters
+
+<ParamField path="config" type="DiscountDef" required>
+  The discount configuration object.
+
+  <Expandable title="properties">
+    <ParamField path="code" type="string" required>
+      The code the user enters at checkout (e.g., 'BLACKFRIDAY_24', 'LAUNCH50').
+    </ParamField>
+
+    <ParamField path="name" type="string">
+      Friendly name displayed on invoices and receipts.
+    </ParamField>
+
+    <ParamField path="type" type="'percent' | 'amount'" required>
+      The type of discount:
+      - `percent`: Percentage off (0-100)
+      - `amount`: Fixed amount off in smallest currency unit
+    </ParamField>
+
+    <ParamField path="value" type="number" required>
+      The discount value:
+      - For `percent`: 0-100 (e.g., 25 = 25% off)
+      - For `amount`: cents/smallest unit (e.g., 1000 = $10.00 off)
+    </ParamField>
+
+    <ParamField path="duration" type="'once' | 'forever' | 'repeating'" required>
+      How long the discount lasts:
+      - `once`: Applied to the first invoice only
+      - `forever`: Applied to every invoice indefinitely
+      - `repeating`: Applied for a specific number of months
+    </ParamField>
+
+    <ParamField path="duration_in_months" type="number">
+      Required if `duration === 'repeating'`. Number of billing cycles to apply the discount.
+    </ParamField>
+
+    <ParamField path="applies_to_plans" type="string[]">
+      Restrict discount to specific plan slugs. Empty or omitted means all plans.
+    </ParamField>
+
+    <ParamField path="max_redemptions" type="number">
+      Maximum number of times this code can be redeemed globally. Omit for unlimited.
+    </ParamField>
+
+    <ParamField path="expires_at" type="string">
+      Expiration date in ISO 8601 format (e.g., "2024-12-31T23:59:59Z").
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Returns
+
+<ResponseField name="config" type="T">
+  The same configuration object passed in, with full type inference preserved.
+</ResponseField>
+
+## Usage
+
+### Percentage Discount - One Time
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const welcome = defineDiscount({
+  code: "WELCOME20",
+  name: "New Customer Welcome - 20% Off First Month",
+  type: "percent",
+  value: 20,
+  duration: "once",
+  max_redemptions: 1000,
+  expires_at: "2024-12-31T23:59:59Z",
+});
+```
+
+### Percentage Discount - Forever
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const nonprofit = defineDiscount({
+  code: "NONPROFIT50",
+  name: "Nonprofit/Education - 50% Off Forever",
+  type: "percent",
+  value: 50,
+  duration: "forever",
+  // No expiration for nonprofit discounts
+});
+```
+
+### Percentage Discount - Repeating
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const launch = defineDiscount({
+  code: "LAUNCH50",
+  name: "Launch Special - 50% Off for 3 Months",
+  type: "percent",
+  value: 50,
+  duration: "repeating",
+  duration_in_months: 3,
+  max_redemptions: 100,
+  expires_at: "2024-06-30T23:59:59Z",
+});
+```
+
+### Fixed Amount Discount
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const tenOff = defineDiscount({
+  code: "SAVE10",
+  name: "$10 Off First Month",
+  type: "amount",
+  value: 1000, // $10.00 in cents
+  duration: "once",
+  max_redemptions: 500,
+});
+```
+
+### Plan-Specific Discount
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const enterpriseTrial = defineDiscount({
+  code: "ENTERPRISE_TRIAL",
+  name: "Enterprise Trial - 30% Off for 6 Months",
+  type: "percent",
+  value: 30,
+  duration: "repeating",
+  duration_in_months: 6,
+  applies_to_plans: ["enterprise"], // Only for enterprise plan
+});
+```
+
+### Black Friday Campaign
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const blackFriday = defineDiscount({
+  code: "BLACKFRIDAY_2024",
+  name: "Black Friday 2024 - 40% Off Yearly Plans",
+  type: "percent",
+  value: 40,
+  duration: "once",
+  applies_to_plans: ["pro", "business"], // Only yearly intervals
+  max_redemptions: 250,
+  expires_at: "2024-11-30T23:59:59Z",
+});
+```
+
+### Partner/Referral Discount
+
+```typescript
+import { defineDiscount } from "@revstack/core";
+
+export const partner = defineDiscount({
+  code: "PARTNER_ACME",
+  name: "Acme Corp Partnership - 25% Off Forever",
+  type: "percent",
+  value: 25,
+  duration: "forever",
+  // No max_redemptions for partner codes
+});
+```
+
+### Complete Configuration
+
+```typescript
+import { defineConfig, defineDiscount } from "@revstack/core";
+
+export default defineConfig({
+  features: { /* ... */ },
+  plans: { /* ... */ },
+  coupons: [
+    defineDiscount({
+      code: "WELCOME20",
+      name: "Welcome - 20% Off",
+      type: "percent",
+      value: 20,
+      duration: "once",
+      max_redemptions: 1000,
+    }),
+    defineDiscount({
+      code: "LAUNCH50",
+      name: "Launch Special - 50% Off 3 Months",
+      type: "percent",
+      value: 50,
+      duration: "repeating",
+      duration_in_months: 3,
+      expires_at: "2024-12-31T23:59:59Z",
+    }),
+    defineDiscount({
+      code: "SAVE10",
+      name: "$10 Off",
+      type: "amount",
+      value: 1000,
+      duration: "once",
+    }),
+  ],
+});
+```
+
+## Discount Types
+
+### Percentage Discount
+
+Reduces the price by a percentage:
+
+```typescript
+{
+  type: "percent",
+  value: 25, // 25% off
+}
+
+// $100/month plan → $75/month with discount
+```
+
+### Amount Discount
+
+Reduces the price by a fixed amount:
+
+```typescript
+{
+  type: "amount",
+  value: 1000, // $10.00 off (in cents)
+}
+
+// $100/month plan → $90/month with discount
+```
+
+## Duration Options
+
+### Once
+
+Applied to the first invoice only:
+
+```typescript
+{ duration: "once" }
+
+// Month 1: $80 (with 20% discount)
+// Month 2+: $100 (regular price)
+```
+
+### Forever
+
+Applied to every invoice indefinitely:
+
+```typescript
+{ duration: "forever" }
+
+// Every month: $80 (with 20% discount)
+```
+
+### Repeating
+
+Applied for a specific number of billing cycles:
+
+```typescript
+{
+  duration: "repeating",
+  duration_in_months: 3,
+}
+
+// Months 1-3: $80 (with 20% discount)
+// Month 4+: $100 (regular price)
+```
+
+## Best Practices
+
+### Naming Conventions
+
+- Use uppercase for `code` (e.g., "LAUNCH50", "SAVE10")
+- Use descriptive names that include the offer (e.g., "Launch Special - 50% Off")
+
+### Expiration
+
+- Always set `expires_at` for promotional campaigns
+- Omit `expires_at` for permanent partner/nonprofit codes
+
+### Redemption Limits
+
+- Set `max_redemptions` for limited-time promotions
+- Omit `max_redemptions` for evergreen codes
+
+### Plan Restrictions
+
+- Use `applies_to_plans` for plan-specific offers
+- Omit to allow discount on all plans
+
+## Source
+
+**Location**: [`packages/core/src/define.ts:88-90`](~/workspace/source/packages/core/src/define.ts)
+
+## Related
+
+- [defineConfig](/api/core/define-config) - Define the root configuration
+- [definePlan](/api/core/define-plan) - Define plans that discounts apply to

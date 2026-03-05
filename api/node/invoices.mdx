@@ -1,0 +1,276 @@
+---
+title: "Invoices"
+description: "Query billing invoices (read-only)"
+---
+
+## Overview
+
+The `InvoicesClient` provides read-only access to billing invoices. It's used to display billing history to end users. Invoice creation is handled automatically by the payment pipeline and is not accessible from the SDK.
+
+## Methods
+
+### list()
+
+List invoices with optional filters.
+
+```typescript
+const response = await revstack.invoices.list(params);
+```
+
+<ParamField path="params" type="ListInvoicesParams">
+  Filter and pagination parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string">
+      Filter by customer ID.
+      
+      **Example:** `"usr_abc123"`
+    </ParamField>
+    
+    <ParamField path="subscriptionId" type="string">
+      Filter by subscription ID.
+      
+      **Example:** `"sub_abc123"`
+    </ParamField>
+    
+    <ParamField path="status" type="string">
+      Filter by invoice status.
+      
+      **Example:** `"paid"`, `"open"`, `"void"`
+    </ParamField>
+    
+    <ParamField path="limit" type="number">
+      Maximum number of records to return.
+    </ParamField>
+    
+    <ParamField path="offset" type="number">
+      Number of records to skip.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="response" type="PaginatedResponse<Invoice>">
+  A paginated list of invoices.
+  
+  <Expandable title="properties">
+    <ResponseField name="data" type="Invoice[]">
+      Array of invoice records.
+    </ResponseField>
+    
+    <ResponseField name="total" type="number">
+      Total number of records matching the query.
+    </ResponseField>
+    
+    <ResponseField name="hasMore" type="boolean">
+      Whether more records exist beyond this page.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+// List invoices for a customer's billing history page
+const { data: invoices } = await revstack.invoices.list({
+  customerId: "usr_abc123",
+  status: "paid",
+});
+
+for (const invoice of invoices) {
+  console.log(`Invoice ${invoice.id}: ${invoice.amount}`);
+}
+```
+
+---
+
+### get()
+
+Retrieve a single invoice by ID.
+
+```typescript
+const invoice = await revstack.invoices.get(invoiceId);
+```
+
+<ParamField path="invoiceId" type="string" required>
+  The invoice's unique identifier.
+  
+  **Example:** `"inv_abc123"`
+</ParamField>
+
+<ResponseField name="invoice" type="Invoice">
+  The invoice record.
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      Unique identifier with `inv_` prefix.
+    </ResponseField>
+    
+    <ResponseField name="subscriptionId" type="string">
+      The subscription this invoice belongs to.
+    </ResponseField>
+    
+    <ResponseField name="amount" type="number">
+      Invoice amount in the smallest currency unit (e.g. cents).
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string">
+      ISO 4217 currency code (max 3 characters).
+      
+      **Example:** `"USD"`, `"EUR"`
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Invoice status: `draft`, `open`, `paid`, `void`, `uncollectible`.
+    </ResponseField>
+    
+    <ResponseField name="billingReason" type="string">
+      Reason the invoice was created.
+      
+      **Example:** `"subscription_create"`, `"subscription_cycle"`, `"manual"`
+    </ResponseField>
+    
+    <ResponseField name="paidAt" type="string">
+      ISO 8601 timestamp of when the invoice was paid.
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp of creation.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const invoice = await revstack.invoices.get("inv_abc123");
+
+console.log(`Amount: $${invoice.amount / 100}`);
+console.log(`Status: ${invoice.status}`);
+console.log(`Paid: ${invoice.paidAt}`);
+```
+
+## Common Use Cases
+
+### Billing History Page
+
+```typescript
+// Display customer's invoice history
+async function getBillingHistory(customerId: string) {
+  const { data: invoices } = await revstack.invoices.list({
+    customerId,
+    limit: 50,
+  });
+  
+  return invoices.map(inv => ({
+    id: inv.id,
+    date: new Date(inv.createdAt!).toLocaleDateString(),
+    amount: `$${(inv.amount / 100).toFixed(2)}`,
+    status: inv.status,
+    reason: inv.billingReason,
+  }));
+}
+```
+
+### Invoice Details View
+
+```typescript
+// Show detailed invoice information
+async function getInvoiceDetails(invoiceId: string) {
+  const invoice = await revstack.invoices.get(invoiceId);
+  
+  return {
+    invoiceNumber: invoice.id,
+    amount: invoice.amount / 100,
+    currency: invoice.currency,
+    status: invoice.status,
+    billingReason: invoice.billingReason,
+    createdDate: invoice.createdAt,
+    paidDate: invoice.paidAt,
+  };
+}
+```
+
+### Payment Status Check
+
+```typescript
+// Check if a specific invoice has been paid
+async function isInvoicePaid(invoiceId: string): Promise<boolean> {
+  const invoice = await revstack.invoices.get(invoiceId);
+  return invoice.status === "paid";
+}
+```
+
+### Subscription Invoices
+
+```typescript
+// Get all invoices for a subscription
+async function getSubscriptionInvoices(subscriptionId: string) {
+  const { data: invoices } = await revstack.invoices.list({
+    subscriptionId,
+  });
+  
+  return invoices.sort((a, b) => 
+    new Date(b.createdAt!).getTime() - new Date(a.createdAt!).getTime()
+  );
+}
+```
+
+### Total Revenue Calculation
+
+```typescript
+// Calculate total revenue from paid invoices
+async function calculateRevenue(customerId: string) {
+  const { data: invoices } = await revstack.invoices.list({
+    customerId,
+    status: "paid",
+  });
+  
+  const total = invoices.reduce((sum, inv) => sum + inv.amount, 0);
+  
+  return {
+    total: total / 100, // Convert cents to dollars
+    count: invoices.length,
+    currency: invoices[0]?.currency ?? "USD",
+  };
+}
+```
+
+### Outstanding Invoices
+
+```typescript
+// Get unpaid invoices for a customer
+async function getOutstandingInvoices(customerId: string) {
+  const { data: invoices } = await revstack.invoices.list({
+    customerId,
+    status: "open",
+  });
+  
+  const totalDue = invoices.reduce((sum, inv) => sum + inv.amount, 0);
+  
+  return {
+    invoices,
+    count: invoices.length,
+    totalDue: totalDue / 100,
+  };
+}
+```
+
+### Invoice Export
+
+```typescript
+// Export invoices to CSV format
+async function exportInvoices(customerId: string) {
+  const { data: invoices } = await revstack.invoices.list({
+    customerId,
+  });
+  
+  const csv = [
+    "Invoice ID,Date,Amount,Currency,Status,Reason",
+    ...invoices.map(inv => 
+      `${inv.id},${inv.createdAt},${inv.amount / 100},${inv.currency},${inv.status},${inv.billingReason}`
+    ),
+  ].join("\n");
+  
+  return csv;
+}
+```

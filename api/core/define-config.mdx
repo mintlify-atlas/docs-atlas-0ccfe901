@@ -1,0 +1,159 @@
+---
+title: defineConfig
+description: Define the root billing configuration for type inference
+---
+
+## Overview
+
+The `defineConfig()` function wraps the entire `revstack.config.ts` export to provide full type inference and autocomplete for your billing configuration. It's an identity function that returns the input as-is while preserving type information.
+
+## Function Signature
+
+```typescript
+function defineConfig<T extends RevstackConfig>(config: T): T
+```
+
+### Type Parameters
+
+<ParamField path="T" type="T extends RevstackConfig">
+  The configuration type. Must extend `RevstackConfig`.
+</ParamField>
+
+### Parameters
+
+<ParamField path="config" type="T" required>
+  The complete billing configuration object containing features, plans, addons, and coupons.
+
+  <Expandable title="properties">
+    <ParamField path="features" type="Record<string, FeatureDefInput>" required>
+      Dictionary of all available features, keyed by slug.
+    </ParamField>
+
+    <ParamField path="plans" type="Record<string, PlanDefInput>" required>
+      Dictionary of all plans, keyed by slug.
+    </ParamField>
+
+    <ParamField path="addons" type="Record<string, AddonDefInput>">
+      Dictionary of available add-ons, keyed by slug.
+    </ParamField>
+
+    <ParamField path="coupons" type="DiscountDef[]">
+      Array of available coupons/discounts.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Returns
+
+<ResponseField name="config" type="T">
+  The same configuration object passed in, with full type inference preserved.
+</ResponseField>
+
+## Usage
+
+### Basic Configuration
+
+```typescript
+import { defineConfig, defineFeature, definePlan } from "@revstack/core";
+
+export default defineConfig({
+  features: {
+    seats: defineFeature({
+      name: "Seats",
+      type: "static",
+      unit_type: "count",
+    }),
+    storage: defineFeature({
+      name: "Storage",
+      type: "metered",
+      unit_type: "bytes",
+    }),
+  },
+  plans: {
+    starter: definePlan({
+      name: "Starter",
+      is_default: true,
+      is_public: true,
+      type: "free",
+      features: {
+        seats: { value_limit: 3 },
+        storage: { value_limit: 5_000_000_000 }, // 5 GB
+      },
+    }),
+    pro: definePlan({
+      name: "Pro",
+      is_default: false,
+      is_public: true,
+      type: "paid",
+      features: {
+        seats: { value_limit: 10 },
+        storage: { value_limit: 100_000_000_000 }, // 100 GB
+      },
+      prices: [
+        {
+          amount: 2900,
+          currency: "USD",
+          billing_interval: "monthly",
+        },
+      ],
+    }),
+  },
+});
+```
+
+### With Add-ons and Coupons
+
+```typescript
+import { defineConfig, defineFeature, definePlan, defineAddon, defineDiscount } from "@revstack/core";
+
+export default defineConfig({
+  features: {
+    seats: defineFeature({
+      name: "Team Seats",
+      type: "static",
+      unit_type: "count",
+    }),
+  },
+  plans: {
+    // ... your plans
+  },
+  addons: {
+    extra_seats: defineAddon({
+      name: "Extra Seats (5)",
+      type: "recurring",
+      amount: 500,
+      currency: "USD",
+      billing_interval: "monthly",
+      features: {
+        seats: {
+          value_limit: 5,
+          type: "increment",
+        },
+      },
+    }),
+  },
+  coupons: [
+    defineDiscount({
+      code: "LAUNCH50",
+      name: "Launch Special - 50% Off",
+      type: "percent",
+      value: 50,
+      duration: "repeating",
+      duration_in_months: 3,
+      max_redemptions: 100,
+    }),
+  ],
+});
+```
+
+## Source
+
+**Location**: [`packages/core/src/define.ts:98-100`](~/workspace/source/packages/core/src/define.ts)
+
+## Related
+
+- [defineFeature](/api/core/define-feature) - Define individual features
+- [definePlan](/api/core/define-plan) - Define subscription plans
+- [defineAddon](/api/core/define-addon) - Define add-on products
+- [defineDiscount](/api/core/define-discount) - Define discount coupons
+- [validateConfig](/api/core/validator) - Validate configuration integrity

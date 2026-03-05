@@ -1,0 +1,318 @@
+---
+title: "Plans"
+description: "Query billing plans (read-only)"
+---
+
+## Overview
+
+The `PlansClient` provides read-only access to billing plans. It's used by merchants' frontends to render pricing pages and plan selectors. Plan mutations are handled via `revstack.admin.plans`.
+
+## Methods
+
+### list()
+
+List plans with optional filters.
+
+```typescript
+const response = await revstack.plans.list(params);
+```
+
+<ParamField path="params" type="ListPlansParams">
+  Filter and pagination parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="status" type="string">
+      Filter by plan status.
+      
+      **Example:** `"active"`, `"draft"`, `"archived"`
+    </ParamField>
+    
+    <ParamField path="type" type="string">
+      Filter by plan type.
+      
+      **Example:** `"free"`, `"paid"`, `"custom"`
+    </ParamField>
+    
+    <ParamField path="limit" type="number">
+      Maximum number of records to return.
+    </ParamField>
+    
+    <ParamField path="offset" type="number">
+      Number of records to skip.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="response" type="PaginatedResponse<Plan>">
+  A paginated list of plans.
+  
+  <Expandable title="properties">
+    <ResponseField name="data" type="Plan[]">
+      Array of plan records.
+    </ResponseField>
+    
+    <ResponseField name="total" type="number">
+      Total number of records matching the query.
+    </ResponseField>
+    
+    <ResponseField name="hasMore" type="boolean">
+      Whether more records exist beyond this page.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Fetch all public plans for the pricing page
+const { data: plans } = await revstack.plans.list({
+  status: "active",
+});
+
+for (const plan of plans) {
+  console.log(`${plan.name}: ${plan.slug}`);
+}
+```
+
+---
+
+### get()
+
+Retrieve a single plan by ID, including its nested prices and entitlements.
+
+```typescript
+const plan = await revstack.plans.get(planId);
+```
+
+<ParamField path="planId" type="string" required>
+  The plan's unique identifier.
+  
+  **Example:** `"plan_pro"` or `"plan_abc123"`
+</ParamField>
+
+<ResponseField name="plan" type="Plan">
+  The plan with populated `prices[]` and `entitlements[]`.
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      Unique identifier with `plan_` prefix.
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Human-readable plan name.
+      
+      **Example:** `"Pro"`, `"Enterprise"`
+    </ResponseField>
+    
+    <ResponseField name="slug" type="string">
+      URL-safe unique slug.
+      
+      **Example:** `"pro"`, `"enterprise"`
+    </ResponseField>
+    
+    <ResponseField name="description" type="string">
+      Optional plan description for display in pricing pages.
+    </ResponseField>
+    
+    <ResponseField name="projectId" type="string">
+      Project this plan belongs to.
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Plan status: `draft`, `active`, `archived`.
+    </ResponseField>
+    
+    <ResponseField name="type" type="string">
+      Plan type: `free`, `paid`, `custom`.
+    </ResponseField>
+    
+    <ResponseField name="metadata" type="Record<string, unknown>">
+      Arbitrary key-value metadata.
+    </ResponseField>
+    
+    <ResponseField name="isDefault" type="boolean">
+      Whether this is the default plan assigned to new customers.
+    </ResponseField>
+    
+    <ResponseField name="isPublic" type="boolean">
+      Whether this plan is publicly visible in pricing pages.
+    </ResponseField>
+    
+    <ResponseField name="prices" type="Price[]">
+      Associated prices (billing intervals).
+      
+      <Expandable title="Price properties">
+        <ResponseField name="id" type="string">
+          Unique identifier with `price_` prefix.
+        </ResponseField>
+        
+        <ResponseField name="planId" type="string">
+          The plan this price belongs to.
+        </ResponseField>
+        
+        <ResponseField name="amount" type="number">
+          Price amount in the smallest currency unit (e.g. cents).
+        </ResponseField>
+        
+        <ResponseField name="currency" type="string">
+          ISO 4217 currency code. Defaults to `USD`.
+        </ResponseField>
+        
+        <ResponseField name="billingInterval" type="string">
+          Billing interval: `month`, `year`, `week`, `day`.
+        </ResponseField>
+        
+        <ResponseField name="trialPeriodDays" type="number">
+          Number of trial days before billing begins.
+        </ResponseField>
+        
+        <ResponseField name="isActive" type="boolean">
+          Whether this price is currently available for new subscriptions.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="entitlements" type="PlanEntitlement[]">
+      Associated entitlement allocations.
+      
+      <Expandable title="PlanEntitlement properties">
+        <ResponseField name="id" type="string">
+          Unique identifier with `plan_ent_` prefix.
+        </ResponseField>
+        
+        <ResponseField name="planId" type="string">
+          The plan this allocation belongs to.
+        </ResponseField>
+        
+        <ResponseField name="entitlementId" type="string">
+          The entitlement being allocated.
+        </ResponseField>
+        
+        <ResponseField name="valueLimit" type="number">
+          Numeric usage limit (for metered entitlements). `null` = unlimited.
+        </ResponseField>
+        
+        <ResponseField name="valueBool" type="boolean">
+          Boolean value (for boolean entitlements).
+        </ResponseField>
+        
+        <ResponseField name="isHardLimit" type="boolean">
+          Whether exceeding the limit blocks access.
+        </ResponseField>
+        
+        <ResponseField name="resetPeriod" type="string">
+          Reset interval: `monthly`, `daily`, `yearly`, `never`.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp of creation.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Get a specific plan with prices and entitlements
+const proPlan = await revstack.plans.get("plan_pro");
+
+console.log(proPlan.name); // "Pro"
+console.log(proPlan.prices); // [{ amount: 4900, billingInterval: "month" }]
+console.log(proPlan.entitlements); // [{ entitlementId: "ent_api", valueLimit: 10000 }]
+```
+
+## Common Use Cases
+
+### Pricing Page
+
+```typescript
+// Fetch all active plans for a pricing page
+async function getPricingPlans() {
+  const { data: plans } = await revstack.plans.list({
+    status: "active",
+  });
+  
+  return plans.map(plan => ({
+    name: plan.name,
+    slug: plan.slug,
+    description: plan.description,
+    prices: plan.prices?.map(price => ({
+      amount: price.amount / 100, // Convert cents to dollars
+      currency: price.currency,
+      interval: price.billingInterval,
+    })),
+  }));
+}
+```
+
+### Plan Comparison Table
+
+```typescript
+// Build a feature comparison matrix
+async function buildComparisonMatrix() {
+  const { data: plans } = await revstack.plans.list({
+    status: "active",
+  });
+  
+  // Get detailed plan info with entitlements
+  const detailedPlans = await Promise.all(
+    plans.map(p => revstack.plans.get(p.id))
+  );
+  
+  return detailedPlans.map(plan => ({
+    name: plan.name,
+    features: plan.entitlements?.map(ent => ({
+      id: ent.entitlementId,
+      limit: ent.valueLimit,
+      enabled: ent.valueBool,
+    })),
+  }));
+}
+```
+
+### Plan Selector UI
+
+```typescript
+// Generate plan options for a dropdown
+async function getPlanOptions() {
+  const { data: plans } = await revstack.plans.list({
+    status: "active",
+  });
+  
+  return plans.map(plan => ({
+    value: plan.id,
+    label: plan.name,
+    monthlyPrice: plan.prices?.find(
+      p => p.billingInterval === "month"
+    )?.amount,
+  }));
+}
+```
+
+### Find Default Plan
+
+```typescript
+// Get the default plan for new customers
+async function getDefaultPlan() {
+  const { data: plans } = await revstack.plans.list();
+  return plans.find(plan => plan.isDefault);
+}
+```
+
+### Check Plan Features
+
+```typescript
+// Check if a plan includes a specific feature
+async function planHasFeature(
+  planId: string,
+  featureSlug: string
+): Promise<boolean> {
+  const plan = await revstack.plans.get(planId);
+  
+  return plan.entitlements?.some(
+    ent => ent.entitlementId === featureSlug
+  ) ?? false;
+}
+```

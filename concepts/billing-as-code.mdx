@@ -1,0 +1,338 @@
+---
+title: Billing as Code
+description: Define your entire billing model in TypeScript with type-safe configuration
+icon: code
+---
+
+Revstack lets you define your entire billing infrastructure in TypeScript using a declarative configuration file. This "billing as code" approach provides type safety, version control, and a single source of truth for your pricing model.
+
+## Why Billing as Code?
+
+<CardGroup cols={2}>
+  <Card title="Type Safety" icon="shield-check">
+    Catch pricing errors at compile time with full TypeScript inference
+  </Card>
+  <Card title="Version Control" icon="git-alt">
+    Track pricing changes with Git, enabling rollback and audit trails
+  </Card>
+  <Card title="Single Source of Truth" icon="database">
+    Define features, plans, and pricing in one place - no dashboard configuration
+  </Card>
+  <Card title="CI/CD Integration" icon="rocket">
+    Deploy pricing changes through your existing pipeline with `revstack push`
+  </Card>
+</CardGroup>
+
+## Configuration Structure
+
+Your billing configuration lives in `revstack.config.ts` (or within a `revstack/` directory for larger projects):
+
+```typescript
+import { defineConfig } from "@revstackhq/core";
+import { features } from "./revstack/features";
+import { plans } from "./revstack/plans";
+import { addons } from "./revstack/addons";
+import { coupons } from "./revstack/coupons";
+
+export default defineConfig({
+  features,
+  plans,
+  addons,
+  coupons,
+});
+```
+
+The `defineConfig` function is a **type-safe identity function** that returns your configuration as-is while providing full TypeScript inference.
+
+## Defining Features
+
+Features (also called entitlements) represent the capabilities your users can access. Use `defineFeature` to define them:
+
+```typescript revstack/features.ts
+import { defineFeature } from "@revstackhq/core";
+
+export const features = {
+  // Boolean feature - simple on/off toggle
+  sso: defineFeature({
+    name: "Single Sign-On",
+    description: "SAML/OAuth SSO for enterprise",
+    type: "boolean",
+    unit_type: "custom",
+  }),
+
+  // Static feature - fixed limit per plan
+  seats: defineFeature({
+    name: "Team Seats",
+    description: "Number of users that can access the workspace",
+    type: "static",
+    unit_type: "count",
+  }),
+
+  // Metered feature - usage-based with tracking
+  ai_tokens: defineFeature({
+    name: "AI Tokens",
+    description: "Combined input + output tokens for LLM calls",
+    type: "metered",
+    unit_type: "tokens",
+  }),
+};
+```
+
+### Feature Types
+
+<ParamField path="type" type="'boolean' | 'static' | 'metered'" required>
+  The feature type determines how access is checked:
+  - **`boolean`**: On/off flag (e.g., SSO Access, Custom Domain)
+  - **`static`**: Fixed numeric limit included in plan (e.g., 5 Seats)
+  - **`metered`**: Usage-based, tracked over time (e.g., API Calls, AI Tokens)
+</ParamField>
+
+<ParamField path="unit_type" type="UnitType" required>
+  Measurement unit: `count`, `bytes`, `seconds`, `tokens`, `requests`, or `custom`
+</ParamField>
+
+## Defining Plans
+
+Plans define what customers purchase. Use `definePlan` with a generic type parameter for compile-time feature validation:
+
+```typescript revstack/plans.ts
+import { definePlan } from "@revstackhq/core";
+import { features } from "./features";
+
+export const plans = {
+  // Free tier - no payment required
+  default: definePlan<typeof features>({
+    name: "Free",
+    description: "For individuals getting started",
+    is_default: true,
+    is_public: true,
+    type: "free",
+    features: {
+      seats: { value_limit: 1, is_hard_limit: true },
+      sso: { value_bool: false },
+      ai_tokens: { value_limit: 10000, is_hard_limit: true, reset_period: "monthly" },
+    },
+  }),
+
+  // Paid plan with monthly/yearly pricing
+  pro: definePlan<typeof features>({
+    name: "Pro",
+    description: "For growing teams",
+    is_default: false,
+    is_public: true,
+    type: "paid",
+    prices: [
+      {
+        amount: 2900, // $29.00 in cents
+        currency: "USD",
+        billing_interval: "monthly",
+        trial_period_days: 14,
+        available_addons: ["extra_seats"],
+      },
+      {
+        amount: 29000, // $290.00 in cents (save 17%)
+        currency: "USD",
+        billing_interval: "yearly",
+        available_addons: ["extra_seats"],
+      },
+    ],
+    features: {
+      seats: { value_limit: 5, is_hard_limit: true },
+      sso: { value_bool: false },
+      ai_tokens: { value_limit: 100000, is_hard_limit: false, reset_period: "monthly" },
+    },
+  }),
+
+  // Enterprise plan with custom pricing
+  enterprise: definePlan<typeof features>({
+    name: "Enterprise",
+    description: "Custom pricing and SLA",
+    is_default: false,
+    is_public: true,
+    type: "custom", // Redirects to "Contact Sales"
+    features: {
+      seats: { value_limit: 100, is_hard_limit: false },
+      sso: { value_bool: true },
+      ai_tokens: { value_limit: 1000000, is_hard_limit: false, reset_period: "monthly" },
+    },
+  }),
+};
+```
+
+### Plan Types
+
+<ResponseField name="type" type="'free' | 'paid' | 'custom'">
+  - **`free`**: No payment required (e.g., default guest plan, starter tier)
+  - **`paid`**: Requires active payment method and subscription
+  - **`custom`**: Enterprise/B2B contracts where checkout redirects to "Contact Sales"
+</ResponseField>
+
+### Overage Configuration
+
+For metered features with soft limits (`is_hard_limit: false`), define overage pricing:
+
+```typescript
+prices: [
+  {
+    amount: 4900,
+    currency: "USD",
+    billing_interval: "monthly",
+    overage_configuration: {
+      ai_tokens: {
+        overage_amount: 15, // $0.15 in cents
+        overage_unit: 1000000, // per 1M tokens
+      },
+    },
+  },
+]
+```
+
+## Defining Add-ons
+
+Add-ons let customers purchase additional capacity or features on top of their plan:
+
+```typescript revstack/addons.ts
+import { defineAddon } from "@revstackhq/core";
+import { features } from "./features";
+
+export const addons = {
+  // Recurring add-on - billed monthly
+  extra_seats: defineAddon<typeof features>({
+    name: "10 Extra Seats",
+    description: "Add 10 more users to your workspace",
+    type: "recurring",
+    amount: 5000, // $50.00
+    currency: "USD",
+    billing_interval: "monthly",
+    features: {
+      seats: { value_limit: 10, type: "increment", is_hard_limit: true },
+    },
+  }),
+
+  // One-time add-on - single charge
+  onboarding_service: defineAddon<typeof features>({
+    name: "Onboarding Service",
+    description: "White-glove setup and training",
+    type: "one_time",
+    amount: 99900, // $999.00
+    currency: "USD",
+    features: {}, // No feature modifications
+  }),
+
+  // Add-on that unlocks a boolean feature
+  sso_module: defineAddon<typeof features>({
+    name: "SSO Module",
+    description: "Enable SAML/OAuth SSO",
+    type: "recurring",
+    amount: 10000, // $100.00
+    currency: "USD",
+    billing_interval: "monthly",
+    features: {
+      sso: { has_access: true },
+    },
+  }),
+};
+```
+
+### Add-on Feature Modification Types
+
+<ParamField path="type" type="'increment' | 'set'">
+  - **`increment`**: Adds to the base plan limit (e.g., plan has 5 seats + addon adds 10 = 15 total)
+  - **`set`**: Overrides the base plan limit completely (e.g., plan has 5 seats, addon sets to 100)
+</ParamField>
+
+## Defining Discounts
+
+Discounts (coupons) offer temporary price reductions:
+
+```typescript revstack/coupons.ts
+import type { DiscountDef } from "@revstackhq/core";
+
+export const coupons: DiscountDef[] = [
+  // Percentage discount - repeating for 12 months
+  {
+    code: "LAUNCH50",
+    name: "Launch Discount",
+    type: "percent",
+    value: 50, // 50% off
+    duration: "repeating",
+    duration_in_months: 12,
+    max_redemptions: 100,
+    expires_at: "2026-12-31T23:59:59Z",
+  },
+
+  // Fixed amount discount - applied once
+  {
+    code: "WELCOME100",
+    name: "Welcome Credit",
+    type: "amount",
+    value: 10000, // $100.00 off
+    duration: "once",
+    applies_to_plans: ["pro", "enterprise"],
+  },
+
+  // Forever discount - never expires
+  {
+    code: "NONPROFIT",
+    name: "Nonprofit Pricing",
+    type: "percent",
+    value: 30, // 30% off forever
+    duration: "forever",
+  },
+];
+```
+
+## Type Safety Benefits
+
+When you pass `typeof features` to `definePlan` or `defineAddon`, TypeScript enforces:
+
+<CodeGroup>
+```typescript Valid - uses defined feature keys
+definePlan<typeof features>({
+  features: {
+    seats: { value_limit: 5 }, // ✅ 'seats' exists in features
+  },
+});
+```
+
+```typescript Invalid - typo in feature key
+definePlan<typeof features>({
+  features: {
+    seets: { value_limit: 5 }, // ❌ TypeScript error: 'seets' does not exist
+  },
+});
+```
+</CodeGroup>
+
+## Deploying Configuration
+
+Push your configuration to Revstack Cloud:
+
+<CodeGroup>
+```bash CLI
+revstack push
+```
+
+```typescript Programmatic
+import { RevstackAdmin } from "@revstackhq/node";
+import config from "./revstack.config";
+
+const admin = new RevstackAdmin({ secretKey: process.env.REVSTACK_SECRET_KEY });
+await admin.plans.sync(config);
+```
+</CodeGroup>
+
+<Info>
+  The CLI validates your configuration with Zod schemas before pushing, catching errors like invalid billing intervals or missing required fields.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Entitlements" icon="shield-check" href="/concepts/entitlements">
+    Learn how to check feature access in your application
+  </Card>
+  <Card title="Usage Metering" icon="chart-line" href="/concepts/usage-metering">
+    Track consumption for metered features
+  </Card>
+</CardGroup>

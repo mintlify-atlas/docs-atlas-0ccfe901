@@ -1,0 +1,359 @@
+---
+title: "AWS Cognito Integration"
+description: "Verify AWS Cognito User Pool JWTs in your Revstack application"
+---
+
+## Overview
+
+AWS Cognito User Pools use RS256 signing with JWKS for token verification. This guide shows you how to integrate Cognito authentication with Revstack.
+
+## Prerequisites
+
+- An AWS account with a Cognito User Pool
+- Your AWS region (e.g., `us-east-1`)
+- Your User Pool ID (e.g., `us-east-1_Abc123`)
+- (Optional) Your App Client ID for audience validation
+
+## Installation
+
+```bash
+npm install @revstackhq/auth
+```
+
+## Configuration
+
+### 1. Get your Cognito credentials
+
+From the AWS Console:
+
+1. Go to **Amazon Cognito** → **User Pools**
+2. Select your User Pool
+3. Note your **User Pool ID** (format: `region_poolId`)
+4. Go to **App Integration** → **App clients**
+5. Note your **App Client ID** (this is used for audience validation)
+
+### 2. Build the auth contract
+
+Create an auth contract using your Cognito configuration:
+
+```typescript
+import { buildAuthContract } from "@revstackhq/auth";
+
+const authContract = buildAuthContract("cognito", {
+  region: "us-east-1",
+  userPoolId: "us-east-1_Abc123",
+  clientId: "1234567890abcdef", // Optional: your app client ID
+});
+```
+
+The contract builder automatically:
+- Constructs the issuer: `https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Abc123`
+- Sets the JWKS URI to `<issuer>/.well-known/jwks.json`
+- Configures RS256 verification strategy
+- Sets the audience to your `clientId` (if provided)
+
+## Verification
+
+### Initialize the verifier
+
+```typescript
+import { RevstackAuth } from "@revstackhq/auth";
+
+const auth = new RevstackAuth(authContract);
+```
+
+### Verify tokens
+
+In your API routes or middleware:
+
+```typescript
+export async function authMiddleware(req, res, next) {
+  const session = await auth.validate(req.headers.authorization);
+
+  if (!session.isValid) {
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Attach user info to request
+  req.userId = session.userId; // Cognito user sub (UUID)
+  req.claims = session.claims; // Full JWT payload
+  
+  next();
+}
+```
+
+## Token structure
+
+Cognito ID tokens contain standard OIDC claims:
+
+```json
+{
+  "iss": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_Abc123",
+  "sub": "123e4567-e89b-12d3-a456-426614174000",
+  "aud": "1234567890abcdef",
+  "token_use": "id",
+  "auth_time": 1516239022,
+  "iat": 1516239022,
+  "exp": 1516242622,
+  "email": "user@example.com",
+  "email_verified": true,
+  "cognito:username": "johndoe",
+  "cognito:groups": ["admins", "users"]
+}
+```
+
+### Accessing Cognito attributes
+
+Cognito includes user attributes in the ID token that you can access:
+
+```typescript
+interface CognitoClaims {
+  email?: string;
+  email_verified?: boolean;
+  phone_number?: string;
+  phone_number_verified?: boolean;
+  "cognito:username": string;
+  "cognito:groups"?: string[];
+  token_use: "id" | "access";
+}
+
+const session = await auth.validate<CognitoClaims>(token);
+
+if (session.isValid) {
+  console.log(session.userId); // "123e4567-e89b-12d3-a456-426614174000"
+  console.log(session.claims["cognito:username"]); // "johndoe"
+  console.log(session.claims["cognito:groups"]); // ["admins", "users"]
+}
+```
+
+## ID tokens vs. Access tokens
+
+Cognito issues two types of tokens:
+
+- **ID tokens** - Contain user attributes and are meant for your application
+- **Access tokens** - Used for authorizing API calls to AWS services
+
+For Revstack integration, you should verify **ID tokens**. You can differentiate them by the `token_use` claim:
+
+```typescript
+const session = await auth.validate(token);
+
+if (session.isValid && session.claims.token_use === "id") {
+  // This is an ID token - proceed
+} else {
+  // Invalid or access token
+  return res.status(401).json({ error: "Invalid token type" });
+}
+```
+
+## Custom attributes
+
+If you've added custom attributes to your User Pool, they'll be prefixed with `custom:`:
+
+```typescript
+interface CustomCognitoClaims {
+  "custom:plan": string;
+  "custom:company": string;
+}
+
+const session = await auth.validate<CustomCognitoClaims>(token);
+
+if (session.isValid) {
+  console.log(session.claims["custom:plan"]); // "pro"
+  console.log(session.claims["custom:company"]); // "Acme Inc"
+}
+```
+
+## Using the username instead of sub
+
+If you want to use the Cognito username as the user ID instead of the `sub` claim:
+
+```typescript
+const authContract = buildAuthContract("cognito", {
+  region: "us-east-1",
+  userPoolId: "us-east-1_Abc123",
+  clientId: "1234567890abcdef",
+  userIdClaim: "cognito:username",
+});
+
+const session = await auth.validate(token);
+if (session.isValid) {
+  console.log(session.userId); // "johndoe" instead of UUID
+}
+```
+
+## Complete example
+
+Here's a full Express.js integration:
+
+```typescript
+import express from "express";
+import { buildAuthContract, RevstackAuth, AuthErrorCode } from "@revstackhq/auth";
+
+// Build contract once at startup
+const authContract = buildAuthContract("cognito", {
+  region: process.env.AWS_REGION!,
+  userPoolId: process.env.COGNITO_USER_POOL_ID!,
+  clientId: process.env.COGNITO_CLIENT_ID,
+});
+
+const auth = new RevstackAuth(authContract);
+
+const app = express();
+
+// Auth middleware
+app.use(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader) {
+    return res.status(401).json({ error: "Missing authorization header" });
+  }
+
+  const session = await auth.validate(authHeader);
+
+  if (!session.isValid) {
+    if (session.errorCode === AuthErrorCode.TOKEN_EXPIRED) {
+      return res.status(401).json({ 
+        error: "Token expired",
+        code: "token_expired" 
+      });
+    }
+    
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Verify it's an ID token
+  if (session.claims.token_use !== "id") {
+    return res.status(401).json({ error: "Invalid token type" });
+  }
+
+  // Store user info on request
+  req.userId = session.userId;
+  req.username = session.claims["cognito:username"];
+  req.groups = session.claims["cognito:groups"] || [];
+  
+  next();
+});
+
+// Protected route
+app.get("/api/profile", (req, res) => {
+  res.json({
+    userId: req.userId,
+    username: req.username,
+    groups: req.groups,
+  });
+});
+
+app.listen(3000);
+```
+
+## Frontend integration
+
+When calling your API from a Cognito-enabled frontend:
+
+```typescript
+import { CognitoUserPool, CognitoUser } from "amazon-cognito-identity-js";
+
+const poolData = {
+  UserPoolId: process.env.REACT_APP_COGNITO_USER_POOL_ID!,
+  ClientId: process.env.REACT_APP_COGNITO_CLIENT_ID!,
+};
+
+const userPool = new CognitoUserPool(poolData);
+
+async function callAPI() {
+  const cognitoUser = userPool.getCurrentUser();
+  
+  if (!cognitoUser) {
+    throw new Error("Not authenticated");
+  }
+  
+  return new Promise((resolve, reject) => {
+    cognitoUser.getSession((err, session) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      
+      const idToken = session.getIdToken().getJwtToken();
+      
+      fetch("/api/profile", {
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      })
+        .then(res => res.json())
+        .then(resolve)
+        .catch(reject);
+    });
+  });
+}
+```
+
+## Environment variables
+
+Store your Cognito configuration in environment variables:
+
+```bash
+# .env
+AWS_REGION=us-east-1
+COGNITO_USER_POOL_ID=us-east-1_Abc123
+COGNITO_CLIENT_ID=1234567890abcdef
+```
+
+## Testing
+
+To test your integration:
+
+1. Sign in via your Cognito-enabled frontend
+2. Obtain the ID token from the Cognito session
+3. Send it in the Authorization header: `Bearer <id_token>`
+4. Verify the token is validated correctly
+
+You can also use the AWS CLI to get test tokens:
+
+```bash
+aws cognito-idp initiate-auth \
+  --region us-east-1 \
+  --auth-flow USER_PASSWORD_AUTH \
+  --client-id 1234567890abcdef \
+  --auth-parameters USERNAME=johndoe,PASSWORD=yourpassword
+```
+
+## Troubleshooting
+
+### "Issuer mismatch" error
+
+Verify that:
+- Your region is correct
+- Your User Pool ID is formatted correctly (e.g., `us-east-1_Abc123`)
+- The token was issued by the correct User Pool
+
+### "Invalid signature" error
+
+Check that:
+- The token was issued by the correct Cognito User Pool
+- The JWKS endpoint is accessible
+- You're using an ID token, not an access token
+
+### "Audience validation failed" error
+
+Ensure:
+- Your `clientId` matches the App Client ID that issued the token
+- The token's `aud` claim matches your App Client ID
+
+### Using access tokens instead of ID tokens
+
+If you accidentally send access tokens, verification will fail. Always use ID tokens for user authentication. Check the `token_use` claim to verify.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Auth Overview" icon="book" href="/auth/overview">
+    Learn more about JWT verification in Revstack
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation" href="/auth/overview#error-handling">
+    Handle authentication errors gracefully
+  </Card>
+</CardGroup>

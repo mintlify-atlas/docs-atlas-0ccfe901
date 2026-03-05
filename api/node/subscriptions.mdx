@@ -1,0 +1,268 @@
+---
+title: "Subscriptions"
+description: "Create, cancel, and manage customer subscriptions"
+---
+
+## Overview
+
+The `SubscriptionsClient` handles creating, retrieving, canceling, and upgrading/downgrading customer subscriptions.
+
+## Methods
+
+### create()
+
+Create a new subscription for a customer.
+
+```typescript
+const subscription = await revstack.subscriptions.create(params);
+```
+
+<ParamField path="params" type="CreateSubscriptionParams" required>
+  Subscription creation parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string" required>
+      The customer to subscribe.
+      
+      **Example:** `"usr_abc123"`
+    </ParamField>
+    
+    <ParamField path="planId" type="string" required>
+      The plan to subscribe the customer to.
+      
+      **Example:** `"plan_pro"`
+    </ParamField>
+    
+    <ParamField path="priceId" type="string">
+      Optional specific price ID (if the plan has multiple billing intervals).
+      
+      **Example:** `"price_pro_monthly"`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="subscription" type="Subscription">
+  The newly created subscription.
+  
+  <Expandable title="properties">
+    <ResponseField name="id" type="string">
+      Unique identifier with `sub_` prefix.
+    </ResponseField>
+    
+    <ResponseField name="environmentId" type="string">
+      Environment this subscription belongs to.
+    </ResponseField>
+    
+    <ResponseField name="appUserId" type="string">
+      The customer who owns this subscription.
+    </ResponseField>
+    
+    <ResponseField name="planId" type="string">
+      The plan this subscription is for.
+    </ResponseField>
+    
+    <ResponseField name="priceId" type="string">
+      The specific price (billing interval) selected.
+    </ResponseField>
+    
+    <ResponseField name="status" type="string">
+      Current status: `active`, `canceled`, `past_due`, `trialing`, etc.
+    </ResponseField>
+    
+    <ResponseField name="currentPeriodStart" type="string">
+      Start of the current billing period (ISO 8601).
+    </ResponseField>
+    
+    <ResponseField name="currentPeriodEnd" type="string">
+      End of the current billing period (ISO 8601).
+    </ResponseField>
+    
+    <ResponseField name="externalSubscriptionId" type="string">
+      Subscription ID in the external payment gateway (e.g. Stripe `sub_...`).
+    </ResponseField>
+    
+    <ResponseField name="customEntitlements" type="Record<string, unknown>">
+      Per-subscription entitlement overrides.
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp of creation.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const subscription = await revstack.subscriptions.create({
+  customerId: "usr_abc123",
+  planId: "plan_pro",
+});
+
+console.log(`Subscription ${subscription.id} created`);
+```
+
+---
+
+### get()
+
+Retrieve a subscription by ID.
+
+```typescript
+const subscription = await revstack.subscriptions.get(subscriptionId);
+```
+
+<ParamField path="subscriptionId" type="string" required>
+  The subscription's unique identifier.
+  
+  **Example:** `"sub_abc123"`
+</ParamField>
+
+<ResponseField name="subscription" type="Subscription">
+  The subscription record.
+</ResponseField>
+
+**Example:**
+
+```typescript
+const subscription = await revstack.subscriptions.get("sub_abc123");
+console.log(subscription.status); // "active"
+```
+
+---
+
+### list()
+
+List subscriptions with optional filters.
+
+```typescript
+const response = await revstack.subscriptions.list(params);
+```
+
+<ParamField path="params" type="ListSubscriptionsParams">
+  Filter and pagination parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string">
+      Filter by customer ID.
+    </ParamField>
+    
+    <ParamField path="status" type="string">
+      Filter by subscription status.
+      
+      **Example:** `"active"`, `"canceled"`
+    </ParamField>
+    
+    <ParamField path="limit" type="number">
+      Maximum number of records to return.
+    </ParamField>
+    
+    <ParamField path="offset" type="number">
+      Number of records to skip.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="response" type="PaginatedResponse<Subscription>">
+  A paginated list of subscriptions.
+  
+  <Expandable title="properties">
+    <ResponseField name="data" type="Subscription[]">
+      Array of subscription records.
+    </ResponseField>
+    
+    <ResponseField name="total" type="number">
+      Total number of records matching the query.
+    </ResponseField>
+    
+    <ResponseField name="hasMore" type="boolean">
+      Whether more records exist beyond this page.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Get all active subscriptions for a customer
+const { data: subscriptions } = await revstack.subscriptions.list({
+  customerId: "usr_abc123",
+  status: "active",
+});
+```
+
+---
+
+### cancel()
+
+Cancel an active subscription. The subscription will remain active until the end of the current billing period.
+
+```typescript
+const subscription = await revstack.subscriptions.cancel(subscriptionId);
+```
+
+<ParamField path="subscriptionId" type="string" required>
+  The subscription to cancel.
+  
+  **Example:** `"sub_abc123"`
+</ParamField>
+
+<ResponseField name="subscription" type="Subscription">
+  The updated subscription with `canceled` status.
+</ResponseField>
+
+**Example:**
+
+```typescript
+const subscription = await revstack.subscriptions.cancel("sub_abc123");
+console.log(subscription.status); // "canceled"
+```
+
+---
+
+### changePlan()
+
+Change the plan of an existing subscription (upgrade or downgrade). Proration is handled automatically by the billing engine.
+
+```typescript
+const subscription = await revstack.subscriptions.changePlan(
+  subscriptionId,
+  params
+);
+```
+
+<ParamField path="subscriptionId" type="string" required>
+  The subscription to modify.
+</ParamField>
+
+<ParamField path="params" type="ChangePlanParams" required>
+  The new plan parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="newPlanId" type="string" required>
+      The new plan to switch to.
+      
+      **Example:** `"plan_enterprise"`
+    </ParamField>
+    
+    <ParamField path="newPriceId" type="string">
+      Optional specific price ID for the new plan.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="subscription" type="Subscription">
+  The updated subscription.
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Upgrade a customer from Pro to Enterprise
+const subscription = await revstack.subscriptions.changePlan(
+  "sub_abc123",
+  { newPlanId: "plan_enterprise" }
+);
+
+console.log(`Upgraded to ${subscription.planId}`);
+```

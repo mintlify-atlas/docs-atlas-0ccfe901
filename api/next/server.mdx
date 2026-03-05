@@ -1,0 +1,372 @@
+---
+title: 'Next.js Server'
+description: 'Server-side entitlement checks, usage tracking, and metering for Next.js'
+---
+
+## Configuration
+
+### RevstackServerConfig
+
+Configuration object for server-side API calls.
+
+<ParamField path="secretKey" type="string" required>
+  Your project's secret key from the Revstack dashboard. **Keep this secure** - never expose it to the client.
+</ParamField>
+
+<ParamField path="apiUrl" type="string">
+  Custom API base URL (defaults to `https://app.revstack.dev`)
+</ParamField>
+
+<ParamField path="redirectTo" type="string">
+  Optional redirect URL when `requireEntitlement()` denies access
+</ParamField>
+
+---
+
+## Functions
+
+### getEntitlement
+
+Checks if the current user has access to a feature. Must be called from a Server Component or Server Action.
+
+**Signature**
+```typescript
+async function getEntitlement(
+  key: string,
+  config: RevstackServerConfig
+): Promise<Entitlement>
+```
+
+**Parameters**
+- `key` (string) - The feature key to check
+- `config` (RevstackServerConfig) - Server configuration with `secretKey`
+
+**Returns**
+- `Entitlement` object with `{ key, hasAccess, value? }`
+
+**How it works**
+1. Extracts user identity from request headers (`Authorization`, `X-Revstack-Auth`, `X-Revstack-Guest-Id`)
+2. Authenticates to Revstack API using your `secretKey`
+3. Forwards user identity headers to resolve their entitlements
+4. Returns the entitlement for the specified `key`
+
+**Usage**
+
+<CodeGroup>
+```tsx Server Component
+import { getEntitlement } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export default async function FeaturePage() {
+  const entitlement = await getEntitlement('premium-feature', config);
+
+  if (!entitlement.hasAccess) {
+    return <div>Upgrade to access this feature</div>;
+  }
+
+  return <PremiumContent />;
+}
+```
+
+```tsx Server Action
+"use server";
+
+import { getEntitlement } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export async function checkFeatureAccess(featureKey: string) {
+  const entitlement = await getEntitlement(featureKey, config);
+  return entitlement.hasAccess;
+}
+```
+</CodeGroup>
+
+---
+
+### requireEntitlement
+
+Enforces entitlement access - redirects or throws an error if the user lacks access.
+
+**Signature**
+```typescript
+async function requireEntitlement(
+  key: string,
+  config: RevstackServerConfig
+): Promise<Entitlement>
+```
+
+**Parameters**
+- `key` (string) - The required feature key
+- `config` (RevstackServerConfig) - Server configuration
+
+**Returns**
+- `Entitlement` object if access is granted
+
+**Throws/Redirects**
+- Redirects to `config.redirectTo` if provided and access is denied
+- Otherwise throws an error with message `"Access denied: missing entitlement \"<key>\""`
+
+**Usage**
+
+<CodeGroup>
+```tsx With Redirect
+import { requireEntitlement } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+  redirectTo: '/pricing',
+};
+
+export default async function PremiumPage() {
+  // Redirects to /pricing if user lacks access
+  await requireEntitlement('premium-tier', config);
+
+  return <PremiumDashboard />;
+}
+```
+
+```tsx With Error Handling
+import { requireEntitlement } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export default async function AdminPage() {
+  try {
+    await requireEntitlement('admin-access', config);
+  } catch (error) {
+    return <AccessDenied error={error.message} />;
+  }
+
+  return <AdminPanel />;
+}
+```
+</CodeGroup>
+
+---
+
+### trackUsage
+
+Reports metered usage (e.g., API calls, credits consumed) for the current user.
+
+**Signature**
+```typescript
+async function trackUsage(
+  key: string,
+  usage: UsageData,
+  config: RevstackServerConfig
+): Promise<void>
+```
+
+**Parameters**
+- `key` (string) - The feature key to track usage against
+- `usage` (UsageData) - Usage data (see below)
+- `config` (RevstackServerConfig) - Server configuration
+
+**UsageData**
+
+<ParamField path="amount" type="number">
+  For standard metered billing (e.g., 1 API call = 1 credit)
+</ParamField>
+
+<ParamField path="ai" type="object">
+  For AI-specific billing based on token usage
+  
+  <Expandable title="AI usage properties">
+    <ParamField path="modelId" type="string" required>
+      The AI model identifier (e.g., `"gpt-4"`, `"claude-3-opus"`)
+    </ParamField>
+    
+    <ParamField path="promptTokens" type="number" required>
+      Number of input tokens
+    </ParamField>
+    
+    <ParamField path="completionTokens" type="number" required>
+      Number of output tokens
+    </ParamField>
+    
+    <ParamField path="totalTokens" type="number" required>
+      Total tokens (prompt + completion)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Throws**
+- Error if tracking fails (e.g., user has exhausted quota)
+
+**Usage**
+
+<CodeGroup>
+```tsx Standard Metering
+import { trackUsage } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export async function POST(req: Request) {
+  // Deduct 1 credit
+  await trackUsage('api-calls', { amount: 1 }, config);
+
+  const result = await processRequest(req);
+  return Response.json(result);
+}
+```
+
+```tsx AI Usage Tracking
+import { trackUsage } from '@revstackhq/next/server';
+import OpenAI from 'openai';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export async function POST(req: Request) {
+  const openai = new OpenAI();
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4',
+    messages: [{ role: 'user', content: 'Hello!' }],
+  });
+
+  // Track AI token usage
+  await trackUsage(
+    'ai-credits',
+    {
+      ai: {
+        modelId: 'gpt-4',
+        promptTokens: completion.usage!.prompt_tokens,
+        completionTokens: completion.usage!.completion_tokens,
+        totalTokens: completion.usage!.total_tokens,
+      },
+    },
+    config
+  );
+
+  return Response.json(completion.choices[0].message);
+}
+```
+</CodeGroup>
+
+---
+
+### withMetering
+
+Higher-order function that wraps a Route Handler with fixed-cost metering.
+
+**Signature**
+```typescript
+function withMetering(
+  key: string,
+  amount: number,
+  config: RevstackServerConfig,
+  handler: RouteHandler
+): RouteHandler
+```
+
+**Parameters**
+- `key` (string) - The feature key to meter
+- `amount` (number) - Fixed cost per request
+- `config` (RevstackServerConfig) - Server configuration
+- `handler` (RouteHandler) - Your route handler function
+
+**Returns**
+- Wrapped route handler that:
+  1. Deducts `amount` credits before invoking `handler`
+  2. Returns `402 Payment Required` if user lacks credits
+  3. Invokes `handler` only if metering succeeds
+
+**Usage**
+
+<CodeGroup>
+```tsx app/api/generate/route.ts
+import { withMetering } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+// Deduct 1 credit per request
+export const POST = withMetering('ai-credits', 1, config, async (req) => {
+  const body = await req.json();
+  const result = await generateWithAI(body.prompt);
+  return Response.json({ result });
+});
+```
+
+```tsx Multi-credit endpoint
+import { withMetering } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+// Deduct 10 credits for expensive operation
+export const POST = withMetering('compute-credits', 10, config, async (req) => {
+  const result = await runExpensiveComputation();
+  return Response.json({ result });
+});
+```
+
+```tsx Error handling
+import { withMetering } from '@revstackhq/next/server';
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export const POST = withMetering('api-calls', 1, config, async (req) => {
+  // This only runs if metering succeeds
+  // If user lacks credits, they receive:
+  // { "error": "Payment Required", "details": "..." }
+  // with status 402
+  
+  return Response.json({ success: true });
+});
+```
+</CodeGroup>
+
+---
+
+## Types
+
+### Entitlement
+
+```typescript
+interface Entitlement {
+  key: string;
+  hasAccess: boolean;
+  value?: string | number | boolean;
+}
+```
+
+### UsageData
+
+```typescript
+interface UsageData {
+  amount?: number;
+  ai?: {
+    modelId: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+```
+
+---
+
+## Identity Resolution
+
+All server functions automatically extract user identity from request headers:
+
+- `Authorization` or `X-Revstack-Auth` - User's JWT token
+- `X-Revstack-Guest-Id` - Guest fingerprint for anonymous users
+
+You don't need to manually pass these - the SDK handles it automatically in Server Components and Route Handlers.

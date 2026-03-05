@@ -1,0 +1,583 @@
+---
+title: "Provider Core"
+description: "Base interfaces and types for building billing provider integrations"
+---
+
+The `@revstackhq/providers-core` package defines the core interfaces and types used to build billing provider integrations for Stripe, Paddle, Polar, and other payment platforms.
+
+## IProvider
+
+The main interface that all billing provider implementations must satisfy. It extends multiple feature interfaces to provide a unified API across different providers.
+
+```typescript
+interface IProvider extends
+  IPaymentFeature,
+  ISubscriptionFeature,
+  ICheckoutFeature,
+  ICustomerFeature,
+  IBillingPortalFeature,
+  IPaymentMethodFeature,
+  ICatalogFeature
+```
+
+### Core Methods
+
+#### onInstall
+
+Called when a provider is installed in a Revstack workspace. Used to set up webhooks, validate credentials, and perform initial configuration.
+
+```typescript
+onInstall(
+  ctx: ProviderContext,
+  input: InstallInput
+): Promise<AsyncActionResult<InstallResult>>
+```
+
+<ParamField path="ctx" type="ProviderContext" required>
+  Provider execution context with logger, config, and metadata
+</ParamField>
+
+<ParamField path="input" type="InstallInput" required>
+  Installation configuration including credentials and webhook endpoints
+</ParamField>
+
+**Returns:** `AsyncActionResult<InstallResult>` - Installation result with webhook URLs and metadata
+
+#### onUninstall
+
+Called when a provider is uninstalled. Used to clean up webhooks and resources.
+
+```typescript
+onUninstall(
+  ctx: ProviderContext,
+  input: UninstallInput
+): Promise<AsyncActionResult<boolean>>
+```
+
+#### verifyWebhookSignature
+
+Verifies the authenticity of a webhook request from the provider.
+
+```typescript
+verifyWebhookSignature(
+  ctx: ProviderContext,
+  payload: string | Buffer,
+  headers: Record<string, string | string[] | undefined>,
+  secret: string
+): Promise<AsyncActionResult<boolean>>
+```
+
+<ParamField path="payload" type="string | Buffer" required>
+  Raw webhook payload body
+</ParamField>
+
+<ParamField path="headers" type="Record<string, string | string[] | undefined>" required>
+  HTTP headers from the webhook request
+</ParamField>
+
+<ParamField path="secret" type="string" required>
+  Webhook signing secret
+</ParamField>
+
+#### parseWebhookEvent
+
+Parses a provider-specific webhook payload into a normalized Revstack event.
+
+```typescript
+parseWebhookEvent(
+  ctx: ProviderContext,
+  payload: any
+): Promise<AsyncActionResult<RevstackEvent | null>>
+```
+
+**Returns:** `RevstackEvent` or `null` if the event should be ignored
+
+#### getWebhookResponse
+
+Returns the HTTP response to send back to the provider after processing a webhook.
+
+```typescript
+getWebhookResponse(
+  ctx: ProviderContext
+): Promise<AsyncActionResult<WebhookResponse>>
+```
+
+## BaseProvider
+
+Abstract base class that provides default implementations for optional provider features. Extend this class to build a new provider integration.
+
+```typescript
+abstract class BaseProvider implements IProvider {
+  abstract readonly manifest: ProviderManifest;
+  abstract onInstall(ctx: ProviderContext, input: InstallInput): Promise<AsyncActionResult<InstallResult>>;
+  abstract onUninstall(ctx: ProviderContext, input: UninstallInput): Promise<AsyncActionResult<boolean>>;
+  abstract verifyWebhookSignature(...): Promise<AsyncActionResult<boolean>>;
+  abstract parseWebhookEvent(...): Promise<AsyncActionResult<RevstackEvent | null>>;
+}
+```
+
+<Note>
+  **Optional methods**: `BaseProvider` provides default "not implemented" responses for all feature methods. Override only the methods your provider supports.
+</Note>
+
+### Example Implementation
+
+```typescript
+import { BaseProvider, ProviderManifest } from "@revstackhq/providers-core";
+
+export class MyProvider extends BaseProvider {
+  readonly manifest: ProviderManifest = {
+    slug: "my-provider",
+    name: "My Provider",
+    version: "1.0.0",
+    // ... other manifest fields
+  };
+
+  async onInstall(ctx, input) {
+    // Set up webhooks, validate credentials
+    return {
+      data: { webhookId: "wh_123" },
+      status: "success",
+    };
+  }
+
+  async createCustomer(ctx, input) {
+    // Create customer in provider's API
+    const customerId = await this.api.customers.create(input);
+    return {
+      data: customerId,
+      status: "success",
+    };
+  }
+
+  // Override other methods as needed...
+}
+```
+
+## Feature Interfaces
+
+### IPaymentFeature
+
+Methods for processing one-time payments:
+
+<ResponseField name="createPayment" type="(ctx, input: CreatePaymentInput) => Promise<AsyncActionResult<string>>">
+  Create a new payment. Returns the provider's payment ID
+</ResponseField>
+
+<ResponseField name="getPayment" type="(ctx, input: GetPaymentInput) => Promise<AsyncActionResult<Payment>>">
+  Retrieve payment details by ID
+</ResponseField>
+
+<ResponseField name="capturePayment" type="(ctx, input: CapturePaymentInput) => Promise<AsyncActionResult<string>>">
+  Capture a previously authorized payment
+</ResponseField>
+
+<ResponseField name="refundPayment" type="(ctx, input: RefundPaymentInput) => Promise<AsyncActionResult<string>>">
+  Refund a payment (full or partial). Returns the refund ID
+</ResponseField>
+
+<ResponseField name="listPayments" type="(ctx, options: ListPaymentsOptions) => Promise<AsyncActionResult<PaginatedResult<Payment>>>">
+  List payments with pagination
+</ResponseField>
+
+### ISubscriptionFeature
+
+Methods for managing recurring subscriptions:
+
+<ResponseField name="createSubscription" type="(ctx, input: CreateSubscriptionInput) => Promise<AsyncActionResult<string>>">
+  Create a new subscription. Returns the provider's subscription ID
+</ResponseField>
+
+<ResponseField name="getSubscription" type="(ctx, input: GetSubscriptionInput) => Promise<AsyncActionResult<Subscription>>">
+  Retrieve subscription details by ID
+</ResponseField>
+
+<ResponseField name="updateSubscription" type="(ctx, input: UpdateSubscriptionInput) => Promise<AsyncActionResult<string>>">
+  Update subscription (change plan, quantity, etc.)
+</ResponseField>
+
+<ResponseField name="cancelSubscription" type="(ctx, input: CancelSubscriptionInput) => Promise<AsyncActionResult<string>>">
+  Cancel a subscription immediately or at period end
+</ResponseField>
+
+<ResponseField name="pauseSubscription" type="(ctx, input: PauseSubscriptionInput) => Promise<AsyncActionResult<string>>">
+  Pause a subscription (if supported by provider)
+</ResponseField>
+
+<ResponseField name="resumeSubscription" type="(ctx, input: ResumeSubscriptionInput) => Promise<AsyncActionResult<string>>">
+  Resume a paused subscription
+</ResponseField>
+
+<ResponseField name="listSubscriptions" type="(ctx, options: ListSubscriptionsOptions) => Promise<AsyncActionResult<PaginatedResult<Subscription>>>">
+  List subscriptions with pagination
+</ResponseField>
+
+### ICustomerFeature
+
+Methods for managing customer records:
+
+<ResponseField name="createCustomer" type="(ctx, input: CreateCustomerInput) => Promise<AsyncActionResult<string>>">
+  Create a new customer. Returns the provider's customer ID
+</ResponseField>
+
+<ResponseField name="getCustomer" type="(ctx, input: GetCustomerInput) => Promise<AsyncActionResult<Customer>>">
+  Retrieve customer details by ID
+</ResponseField>
+
+<ResponseField name="updateCustomer" type="(ctx, input: UpdateCustomerInput) => Promise<AsyncActionResult<string>>">
+  Update customer information (email, name, metadata, etc.)
+</ResponseField>
+
+<ResponseField name="deleteCustomer" type="(ctx, input: DeleteCustomerInput) => Promise<AsyncActionResult<boolean>>">
+  Delete a customer record
+</ResponseField>
+
+<ResponseField name="listCustomers" type="(ctx, options: ListCustomersOptions) => Promise<AsyncActionResult<PaginatedResult<Customer>>>">
+  List customers with pagination
+</ResponseField>
+
+### ICheckoutFeature
+
+Methods for creating hosted checkout experiences:
+
+<ResponseField name="createCheckoutSession" type="(ctx, input: CheckoutSessionInput) => Promise<AsyncActionResult<CheckoutSessionResult>>">
+  Create a hosted checkout session. Returns a URL to redirect the customer
+</ResponseField>
+
+### IBillingPortalFeature
+
+Methods for customer self-service portals:
+
+<ResponseField name="createBillingPortalSession" type="(ctx, input: BillingPortalInput) => Promise<AsyncActionResult<BillingPortalResult>>">
+  Create a billing portal session. Returns a URL where customers can manage subscriptions and payment methods
+</ResponseField>
+
+### IPaymentMethodFeature
+
+Methods for managing stored payment methods:
+
+<ResponseField name="setupPaymentMethod" type="(ctx, input: SetupPaymentMethodInput) => Promise<AsyncActionResult<CheckoutSessionResult>>">
+  Create a setup session to collect payment method details without charging
+</ResponseField>
+
+<ResponseField name="listPaymentMethods" type="(ctx, options: ListPaymentMethodsOptions) => Promise<AsyncActionResult<PaymentMethod[]>>">
+  List payment methods for a customer
+</ResponseField>
+
+<ResponseField name="deletePaymentMethod" type="(ctx, input: DeletePaymentMethodInput) => Promise<AsyncActionResult<boolean>>">
+  Detach/delete a payment method
+</ResponseField>
+
+### ICatalogFeature
+
+Methods for managing products and prices:
+
+<ResponseField name="createProduct" type="(ctx, input: ProductInput) => Promise<AsyncActionResult<string>>">
+  Create a product in the provider's catalog
+</ResponseField>
+
+<ResponseField name="getProduct" type="(ctx, input: GetProductInput) => Promise<AsyncActionResult<Product>>">
+  Retrieve product details by ID
+</ResponseField>
+
+<ResponseField name="updateProduct" type="(ctx, input: UpdateProductInput) => Promise<AsyncActionResult<string>>">
+  Update product information
+</ResponseField>
+
+<ResponseField name="deleteProduct" type="(ctx, input: DeleteProductInput) => Promise<AsyncActionResult<boolean>>">
+  Delete a product
+</ResponseField>
+
+<ResponseField name="listProducts" type="(ctx, options: ListProductsOptions) => Promise<AsyncActionResult<PaginatedResult<Product>>>">
+  List products with pagination
+</ResponseField>
+
+<ResponseField name="createPrice" type="(ctx, input: PriceInput) => Promise<AsyncActionResult<string>>">
+  Create a price for a product
+</ResponseField>
+
+<ResponseField name="getPrice" type="(ctx, input: GetPriceInput) => Promise<AsyncActionResult<Price>>">
+  Retrieve price details by ID
+</ResponseField>
+
+<ResponseField name="listPrices" type="(ctx, options: ListPricesOptions) => Promise<AsyncActionResult<PaginatedResult<Price>>>">
+  List prices with pagination
+</ResponseField>
+
+## Core Types
+
+### ProviderContext
+
+Context object passed to all provider methods:
+
+<ResponseField name="logger" type="Logger">
+  Logger instance for debug and error messages
+</ResponseField>
+
+<ResponseField name="config" type="Record<string, any>">
+  Provider configuration (API keys, secrets, etc.)
+</ResponseField>
+
+<ResponseField name="metadata" type="Record<string, any>">
+  Additional metadata (workspace ID, environment, etc.)
+</ResponseField>
+
+### AsyncActionResult
+
+Standard response wrapper for all provider methods:
+
+<ResponseField name="data" type="T | null" required>
+  The result data if successful, or `null` if failed
+</ResponseField>
+
+<ResponseField name="status" type="'success' | 'failed'" required>
+  Operation status
+</ResponseField>
+
+<ResponseField name="error" type="RevstackError">
+  Error details if `status` is `"failed"`
+</ResponseField>
+
+#### RevstackError
+
+<ResponseField name="code" type="RevstackErrorCode" required>
+  Standard error code (e.g., `NotImplemented`, `InvalidInput`, `ProviderError`)
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable error message
+</ResponseField>
+
+<ResponseField name="details" type="any">
+  Additional error context
+</ResponseField>
+
+### PaginatedResult
+
+Wrapper for paginated list responses:
+
+<ResponseField name="items" type="T[]" required>
+  Array of items for the current page
+</ResponseField>
+
+<ResponseField name="hasMore" type="boolean" required>
+  Whether there are more pages available
+</ResponseField>
+
+<ResponseField name="nextCursor" type="string">
+  Cursor for the next page (for cursor-based pagination)
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total count of items (if available)
+</ResponseField>
+
+## Example: Creating a Provider
+
+Here's a minimal example of creating a custom provider:
+
+```typescript
+import {
+  BaseProvider,
+  ProviderManifest,
+  ProviderContext,
+  InstallInput,
+  InstallResult,
+  AsyncActionResult,
+  RevstackErrorCode,
+} from "@revstackhq/providers-core";
+
+export class CustomProvider extends BaseProvider {
+  readonly manifest: ProviderManifest = {
+    slug: "custom-provider",
+    name: "Custom Provider",
+    version: "1.0.0",
+    status: "stable",
+    categories: ["card"],
+    description: "A custom billing provider integration",
+    
+    localization: {
+      merchantCountries: ["US"],
+      customerCountries: ["*"],
+      processingCurrencies: ["USD"],
+      settlementCurrencies: ["USD"],
+    },
+    
+    compliance: {
+      actsAsMoR: false,
+      calculatesTaxes: false,
+    },
+    
+    supportedPaymentMethods: ["card"],
+    
+    systemTraits: {
+      hasNativeIdempotency: true,
+      sandboxStrategy: "separate_credentials",
+    },
+    
+    setup: {
+      request: {
+        apiKey: {
+          label: "API Key",
+          type: "password",
+          secure: true,
+          required: true,
+          description: "Your provider API key",
+        },
+      },
+    },
+    
+    capabilities: {
+      payments: {
+        create: true,
+        capture: true,
+        refund: true,
+      },
+      subscriptions: {
+        create: true,
+        update: true,
+        cancel: true,
+      },
+    },
+    
+    media: {
+      icon: "https://example.com/icon.png",
+      logo: "https://example.com/logo.png",
+    },
+    
+    links: {
+      documentation: "https://docs.example.com",
+    },
+    
+    engine: {
+      revstack: "^1.0.0",
+    },
+    
+    paginationType: "cursor",
+  };
+
+  async onInstall(
+    ctx: ProviderContext,
+    input: InstallInput
+  ): Promise<AsyncActionResult<InstallResult>> {
+    try {
+      // Validate credentials
+      const apiKey = input.config.apiKey;
+      if (!apiKey) {
+        return {
+          data: null,
+          status: "failed",
+          error: {
+            code: RevstackErrorCode.InvalidInput,
+            message: "API key is required",
+          },
+        };
+      }
+
+      // Set up webhooks in provider's system
+      const webhookUrl = input.webhookUrl;
+      // ... webhook setup logic
+
+      return {
+        data: {
+          webhookId: "wh_123",
+          metadata: { setupComplete: true },
+        },
+        status: "success",
+      };
+    } catch (error) {
+      return {
+        data: null,
+        status: "failed",
+        error: {
+          code: RevstackErrorCode.ProviderError,
+          message: error.message,
+        },
+      };
+    }
+  }
+
+  async onUninstall(ctx, input) {
+    // Clean up webhooks
+    return {
+      data: true,
+      status: "success",
+    };
+  }
+
+  async verifyWebhookSignature(ctx, payload, headers, secret) {
+    // Verify signature using provider's method
+    const signature = headers["x-provider-signature"];
+    const isValid = this.verifySignature(payload, signature, secret);
+    
+    return {
+      data: isValid,
+      status: "success",
+    };
+  }
+
+  async parseWebhookEvent(ctx, payload) {
+    // Parse provider webhook into RevstackEvent
+    const eventType = payload.type;
+    
+    if (eventType === "charge.succeeded") {
+      return {
+        data: {
+          type: "payment.succeeded",
+          id: payload.id,
+          data: payload.data,
+        },
+        status: "success",
+      };
+    }
+
+    return {
+      data: null,
+      status: "success",
+    };
+  }
+
+  async createCustomer(ctx, input) {
+    const apiKey = ctx.config.apiKey;
+    
+    // Call provider API
+    const customer = await fetch("https://api.provider.com/customers", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: input.email,
+        name: input.name,
+      }),
+    }).then(r => r.json());
+
+    return {
+      data: customer.id,
+      status: "success",
+    };
+  }
+
+  // Implement other methods as needed...
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Idempotency**: If your provider doesn't support native idempotency, set `systemTraits.hasNativeIdempotency: false` in the manifest. Revstack will handle idempotency for you.
+</Tip>
+
+<Note>
+  **Error handling**: Always return `AsyncActionResult` with proper error codes. Never throw exceptions from provider methods.
+</Note>
+
+<Warning>
+  **Sensitive data**: Mark sensitive configuration fields as `secure: true` in the manifest's `setup.request`. These values will be encrypted at rest.
+</Warning>
+
+## Related
+
+- [Provider Registry](/api/providers/registry) - Register and load provider implementations
+- [Provider Manifest](/api/providers/manifest) - Full manifest schema reference

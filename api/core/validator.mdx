@@ -1,0 +1,460 @@
+---
+title: validateConfig
+description: Validate billing configuration integrity and business rules
+---
+
+## Overview
+
+The `validateConfig()` function validates a complete Revstack billing configuration to ensure all business logic rules are satisfied. It collects all validation errors before throwing, allowing developers to fix multiple issues at once.
+
+## Function Signature
+
+```typescript
+function validateConfig(config: RevstackConfig): void
+```
+
+### Parameters
+
+<ParamField path="config" type="RevstackConfig" required>
+  The billing configuration to validate.
+</ParamField>
+
+### Throws
+
+<ResponseField name="error" type="RevstackValidationError">
+  Thrown when any validation rules are violated.
+
+  <Expandable title="properties">
+    <ResponseField name="name" type="string">
+      Always `"RevstackValidationError"`.
+    </ResponseField>
+
+    <ResponseField name="message" type="string">
+      Summary of all validation failures.
+    </ResponseField>
+
+    <ResponseField name="errors" type="string[]">
+      Array of all individual validation error messages.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Validation Rules
+
+The validator checks the following invariants:
+
+### 1. Default Plan
+
+**Exactly one plan** must have `is_default: true`.
+
+```typescript
+// ❌ Error: No default plan
+plans: {
+  pro: { is_default: false, /* ... */ },
+  business: { is_default: false, /* ... */ },
+}
+
+// ❌ Error: Multiple default plans
+plans: {
+  free: { is_default: true, /* ... */ },
+  pro: { is_default: true, /* ... */ },
+}
+
+// ✅ Valid: Exactly one default
+plans: {
+  free: { is_default: true, /* ... */ },
+  pro: { is_default: false, /* ... */ },
+}
+```
+
+### 2. Feature References
+
+**Plans and add-ons** can only reference features defined in `config.features`.
+
+```typescript
+// ❌ Error: Plan references undefined feature
+features: {
+  seats: { /* ... */ },
+},
+plans: {
+  pro: {
+    features: {
+      seats: { value_limit: 10 },
+      storage: { value_limit: 1000 }, // ❌ 'storage' not defined!
+    },
+  },
+}
+
+// ✅ Valid: All referenced features exist
+features: {
+  seats: { /* ... */ },
+  storage: { /* ... */ },
+},
+plans: {
+  pro: {
+    features: {
+      seats: { value_limit: 10 },
+      storage: { value_limit: 1000 },
+    },
+  },
+}
+```
+
+### 3. Overage Configuration
+
+**Overage** can only be configured for **metered features**.
+
+```typescript
+// ❌ Error: Overage for non-metered feature
+features: {
+  seats: { type: "static", /* ... */ },
+},
+plans: {
+  pro: {
+    prices: [{
+      overage_configuration: {
+        seats: { /* ... */ }, // ❌ 'seats' is not metered!
+      },
+    }],
+  },
+}
+
+// ✅ Valid: Overage for metered feature
+features: {
+  api_calls: { type: "metered", /* ... */ },
+},
+plans: {
+  pro: {
+    prices: [{
+      overage_configuration: {
+        api_calls: { 
+          overage_amount: 10, 
+          overage_unit: 1000,
+        },
+      },
+    }],
+  },
+}
+```
+
+### 4. Add-on Billing Intervals
+
+**Recurring add-ons** must match the plan's billing interval.
+
+```typescript
+// ❌ Error: Interval mismatch
+plans: {
+  pro: {
+    prices: [{
+      billing_interval: "monthly",
+      available_addons: ["extra_seats"],
+    }],
+  },
+},
+addons: {
+  extra_seats: {
+    type: "recurring",
+    billing_interval: "yearly", // ❌ Mismatch!
+  },
+}
+
+// ✅ Valid: Intervals match
+plans: {
+  pro: {
+    prices: [{
+      billing_interval: "monthly",
+      available_addons: ["extra_seats"],
+    }],
+  },
+},
+addons: {
+  extra_seats: {
+    type: "recurring",
+    billing_interval: "monthly", // ✅ Match!
+  },
+}
+```
+
+### 5. Add-on References
+
+**Prices** can only reference add-ons that exist in `config.addons`.
+
+```typescript
+// ❌ Error: References undefined add-on
+plans: {
+  pro: {
+    prices: [{
+      available_addons: ["extra_seats"], // ❌ Not defined!
+    }],
+  },
+},
+addons: {}
+
+// ✅ Valid: Add-on exists
+plans: {
+  pro: {
+    prices: [{
+      available_addons: ["extra_seats"],
+    }],
+  },
+},
+addons: {
+  extra_seats: { /* ... */ },
+}
+```
+
+## Usage
+
+### Basic Validation
+
+```typescript
+import { validateConfig, defineConfig } from "@revstack/core";
+import config from "./revstack.config";
+
+try {
+  validateConfig(config);
+  console.log("✅ Configuration is valid");
+} catch (error) {
+  if (error instanceof RevstackValidationError) {
+    console.error("❌ Validation failed:");
+    error.errors.forEach((err) => console.error(`  - ${err}`));
+  }
+}
+```
+
+### In Build Scripts
+
+```typescript
+// scripts/validate-config.ts
+import { validateConfig } from "@revstack/core";
+import config from "../revstack.config";
+
+try {
+  validateConfig(config);
+  console.log("✅ Billing configuration is valid");
+  process.exit(0);
+} catch (error) {
+  if (error instanceof RevstackValidationError) {
+    console.error("\n❌ Billing configuration validation failed:\n");
+    error.errors.forEach((err, i) => {
+      console.error(`  ${i + 1}. ${err}`);
+    });
+    console.error("");
+    process.exit(1);
+  }
+  throw error;
+}
+```
+
+```json
+// package.json
+{
+  "scripts": {
+    "validate:config": "tsx scripts/validate-config.ts",
+    "build": "npm run validate:config && next build"
+  }
+}
+```
+
+### In Tests
+
+```typescript
+import { describe, it, expect } from "vitest";
+import { validateConfig, RevstackValidationError } from "@revstack/core";
+import config from "../revstack.config";
+
+describe("Billing Configuration", () => {
+  it("should be valid", () => {
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it("should reject missing default plan", () => {
+    const invalidConfig = {
+      features: {},
+      plans: {
+        pro: { is_default: false, /* ... */ },
+      },
+    };
+
+    expect(() => validateConfig(invalidConfig)).toThrow(
+      RevstackValidationError
+    );
+  });
+
+  it("should reject undefined feature references", () => {
+    const invalidConfig = {
+      features: {
+        seats: { /* ... */ },
+      },
+      plans: {
+        free: {
+          is_default: true,
+          features: {
+            storage: { /* ... */ }, // Undefined!
+          },
+        },
+      },
+    };
+
+    expect(() => validateConfig(invalidConfig)).toThrow(
+      /references undefined feature "storage"/
+    );
+  });
+});
+```
+
+### Runtime Validation
+
+```typescript
+import { validateConfig, RevstackValidationError } from "@revstack/core";
+import { NextResponse } from "next/server";
+
+export async function POST(request: Request) {
+  const config = await request.json();
+
+  try {
+    validateConfig(config);
+  } catch (error) {
+    if (error instanceof RevstackValidationError) {
+      return NextResponse.json(
+        { 
+          error: "Invalid configuration", 
+          details: error.errors,
+        },
+        { status: 400 }
+      );
+    }
+    throw error;
+  }
+
+  // Save valid configuration
+  await saveConfig(config);
+  return NextResponse.json({ success: true });
+}
+```
+
+### CI/CD Pipeline
+
+```yaml
+# .github/workflows/validate.yml
+name: Validate Billing Config
+
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install
+      - run: npm run validate:config
+```
+
+## Error Messages
+
+The validator provides clear, actionable error messages:
+
+```typescript
+// Single error
+RevstackValidationError: Revstack config validation failed: 
+  No default plan found. Every project must have exactly one plan with is_default: true.
+
+// Multiple errors
+RevstackValidationError: Revstack config validation failed with 3 errors:
+  - No default plan found. Every project must have exactly one plan with is_default: true.
+  - Plan "pro" references undefined feature "storage".
+  - Plan "business" overage_configuration references undefined feature "api_calls".
+```
+
+## RevstackValidationError
+
+```typescript
+class RevstackValidationError extends Error {
+  name: "RevstackValidationError";
+  errors: string[];
+}
+```
+
+### Properties
+
+<ParamField path="name" type="string">
+  Always `"RevstackValidationError"`.
+</ParamField>
+
+<ParamField path="message" type="string">
+  Human-readable summary of all errors.
+</ParamField>
+
+<ParamField path="errors" type="string[]">
+  Array of individual error messages.
+</ParamField>
+
+### Example
+
+```typescript
+try {
+  validateConfig(config);
+} catch (error) {
+  if (error instanceof RevstackValidationError) {
+    console.log(error.name); // "RevstackValidationError"
+    console.log(error.errors); // ["No default plan found.", ...]
+    console.log(error.message); // Full summary
+  }
+}
+```
+
+## Best Practices
+
+### 1. Validate Early
+
+Run validation in your build process to catch errors before deployment:
+
+```json
+{
+  "scripts": {
+    "build": "npm run validate:config && next build"
+  }
+}
+```
+
+### 2. Type-Safe Configuration
+
+Use `defineConfig()` with TypeScript for compile-time safety:
+
+```typescript
+import { defineConfig } from "@revstack/core";
+
+export default defineConfig({
+  // TypeScript catches many errors before runtime
+});
+```
+
+### 3. Test Coverage
+
+Write tests for your billing configuration:
+
+```typescript
+it("should have valid billing config", () => {
+  expect(() => validateConfig(config)).not.toThrow();
+});
+```
+
+### 4. Continuous Validation
+
+Validate configuration in CI/CD to prevent invalid configs from being merged.
+
+## Source
+
+**Location**: [`packages/core/src/validator.ts:153-189`](~/workspace/source/packages/core/src/validator.ts)
+
+**Error Class**: [`packages/core/src/validator.ts:13-27`](~/workspace/source/packages/core/src/validator.ts)
+
+## Related
+
+- [defineConfig](/api/core/define-config) - Define the root configuration
+- [definePlan](/api/core/define-plan) - Define plans validated by this function
+- [defineAddon](/api/core/define-addon) - Define add-ons validated by this function
+- [defineFeature](/api/core/define-feature) - Define features referenced by plans

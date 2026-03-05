@@ -1,0 +1,206 @@
+---
+title: 'Payment Providers Overview'
+description: 'Understanding Revstack provider architecture and abstractions'
+---
+
+## What are Providers?
+
+Providers are pluggable payment integrations that connect Revstack to external payment processors like Stripe, Polar, PayPal, and more. They implement a standardized interface that abstracts away the complexity of different payment APIs, enabling you to switch providers without rewriting your application code.
+
+## Why Use Providers?
+
+Revstack's provider abstraction offers several key benefits:
+
+<CardGroup cols={2}>
+  <Card title="Vendor Independence" icon="swap">
+    Switch between payment processors without changing your application code. All providers implement the same unified interface.
+  </Card>
+  <Card title="Multi-Provider Support" icon="layer-group">
+    Use different providers for different regions, currencies, or use cases within the same application.
+  </Card>
+  <Card title="Future-Proof" icon="shield-check">
+    New payment methods and providers can be added without breaking existing integrations.
+  </Card>
+  <Card title="Type Safety" icon="code">
+    Full TypeScript support with strongly-typed inputs and outputs across all providers.
+  </Card>
+</CardGroup>
+
+## Provider Architecture
+
+Every provider in Revstack implements the `IProvider` interface, which extends multiple feature interfaces:
+
+```typescript
+export interface IProvider extends
+  IPaymentFeature,
+  ISubscriptionFeature,
+  ICheckoutFeature,
+  ICustomerFeature,
+  IBillingPortalFeature,
+  IPaymentMethodFeature,
+  ICatalogFeature {
+  
+  readonly manifest: ProviderManifest;
+  
+  // Lifecycle hooks
+  onInstall(ctx: ProviderContext, input: InstallInput): Promise<AsyncActionResult<InstallResult>>;
+  onUninstall(ctx: ProviderContext, input: UninstallInput): Promise<AsyncActionResult<boolean>>;
+  
+  // Webhook handling
+  verifyWebhookSignature(ctx: ProviderContext, payload: string | Buffer, headers: Record<string, string | string[] | undefined>, secret: string): Promise<AsyncActionResult<boolean>>;
+  parseWebhookEvent(ctx: ProviderContext, payload: any): Promise<AsyncActionResult<RevstackEvent | null>>;
+  getWebhookResponse(ctx: ProviderContext): Promise<AsyncActionResult<WebhookResponse>>;
+}
+```
+
+<Info>
+  See [providers/core/src/interfaces/provider.ts:14](~/workspace/source/packages/providers/core/src/interfaces/provider.ts:14) for the complete interface definition.
+</Info>
+
+## Provider Manifest
+
+Each provider includes a comprehensive manifest that describes its capabilities, requirements, and configuration:
+
+```typescript
+export interface ProviderManifest {
+  // Identity
+  slug: string;                  // Unique identifier (e.g., 'stripe', 'polar')
+  name: string;                  // Human-readable name
+  version: string;               // Provider package version
+  status: 'stable' | 'beta' | 'deprecated' | 'experimental';
+  
+  // Classification
+  categories: ProviderCategory[];        // Card, Wallet, MerchantOfRecord, etc.
+  
+  // Geographic and currency support
+  localization: ProviderLocalization;    // Merchant/customer countries, currencies
+  
+  // Feature flags
+  capabilities: ProviderCapabilities;    // What operations this provider supports
+  
+  // Configuration schema
+  setup: ProviderSetup;                  // Required fields for setup
+  
+  // Compliance and pricing
+  compliance: ProviderCompliance;        // MoR status, tax handling, PCI level
+  pricing?: ProviderPricing;             // Provider's fee structure
+  
+  // Technical traits
+  systemTraits: ProviderSystemTraits;    // Idempotency, rate limits, sandbox
+  engine: ProviderEngine;                // Revstack and Node version requirements
+  
+  // Assets and links
+  media: ProviderMedia;                  // Icons, logos, banners
+  links: {...};                          // Dashboard, docs, support URLs
+}
+```
+
+<Info>
+  See [providers/core/src/manifest.ts:223](~/workspace/source/packages/providers/core/src/manifest.ts:223) for the complete manifest schema.
+</Info>
+
+## Provider Capabilities
+
+The `capabilities` object uses feature flags to tell Revstack what operations a provider supports:
+
+### Checkout Strategy
+
+```typescript
+checkout: {
+  supported: boolean;
+  strategy: 'redirect' | 'native_sdk' | 'sdui';
+}
+```
+
+- **redirect**: User is redirected to a provider-hosted page (e.g., Stripe Checkout)
+- **native_sdk**: Payment form embedded in your app using provider's SDK (e.g., Stripe Elements)
+- **sdui**: Server-driven UI for custom flows (QR codes, bank transfers)
+
+### Payment Features
+
+```typescript
+payments: {
+  supported: boolean;
+  features: {
+    refunds: boolean;           // Full refunds
+    partialRefunds: boolean;    // Partial amount refunds
+    capture: boolean;           // Separate auth/capture
+    disputes: boolean;          // Chargeback lifecycle
+  };
+}
+```
+
+### Subscription Mode
+
+```typescript
+subscriptions: {
+  supported: boolean;
+  mode: 'native' | 'virtual';
+  features: {
+    pause: boolean;
+    resume: boolean;
+    cancellation: boolean;
+    proration?: boolean;
+  };
+}
+```
+
+- **native**: Provider handles billing engine (e.g., Stripe Billing)
+- **virtual**: Revstack runs the scheduler and triggers one-time payments
+
+<Info>
+  See [providers/core/src/types/capabilities.ts:53](~/workspace/source/packages/providers/core/src/types/capabilities.ts:53) for complete capability definitions.
+</Info>
+
+## Provider Context
+
+All provider methods receive a `ProviderContext` object containing:
+
+```typescript
+interface ProviderContext {
+  config: Record<string, any>;   // Decrypted provider credentials
+  logger?: Logger;               // Optional logging interface
+  traceId?: string;              // Request correlation ID
+  environment: 'live' | 'test';  // Execution mode
+}
+```
+
+The context ensures providers have access to credentials and environment configuration without exposing sensitive data.
+
+## Result Wrapper
+
+All provider operations return an `AsyncActionResult` that wraps the response:
+
+```typescript
+type AsyncActionResult<T> = {
+  data: T | null;
+  status: 'success' | 'failed';
+  error?: {
+    code: RevstackErrorCode;
+    message: string;
+    details?: any;
+  };
+}
+```
+
+This standardized result format enables consistent error handling across all providers.
+
+## Available Providers
+
+Revstack includes official providers for:
+
+- **Stripe** - Global payment processing with cards, wallets, and subscriptions
+- **Polar** - Merchant of Record for SaaS with global tax compliance
+
+Additional providers can be built using the same interface. See [Custom Providers](/providers/custom) to learn how to build your own.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Stripe Provider" icon="stripe" href="/providers/stripe">
+    Learn how to configure and use the Stripe provider
+  </Card>
+  <Card title="Custom Providers" icon="code" href="/providers/custom">
+    Build your own custom provider implementation
+  </Card>
+</CardGroup>

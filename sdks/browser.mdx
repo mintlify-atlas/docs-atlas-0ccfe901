@@ -1,0 +1,551 @@
+---
+title: 'Browser SDK'
+description: 'Vanilla JavaScript SDK for client-side entitlement checks'
+icon: 'browser'
+---
+
+The Browser SDK is a framework-agnostic JavaScript library for client-side entitlement checks, checkout flows, and billing portal access.
+
+## Installation
+
+<Tabs>
+  <Tab title="NPM">
+    <CodeGroup>
+    ```bash npm
+    npm install @revstackhq/browser
+    ```
+
+    ```bash yarn
+    yarn add @revstackhq/browser
+    ```
+
+    ```bash pnpm
+    pnpm add @revstackhq/browser
+    ```
+    </CodeGroup>
+  </Tab>
+
+  <Tab title="CDN">
+    Include the SDK via CDN:
+
+    ```html
+    <script src="https://unpkg.com/@revstackhq/browser@latest"></script>
+    <script>
+      const client = new Revstack.RevstackClient({
+        publicKey: "pk_...",
+        getToken: async () => localStorage.getItem("auth_token"),
+      });
+    </script>
+    ```
+  </Tab>
+</Tabs>
+
+## Quick Start
+
+### 1. Initialize the client
+
+```javascript
+import { RevstackClient } from "@revstackhq/browser";
+
+const revstack = new RevstackClient({
+  publicKey: "pk_...", // your public key from Revstack Dashboard
+  getToken: async () => {
+    // Return the current user's JWT, or null if unauthenticated
+    return localStorage.getItem("auth_token") ?? null;
+  },
+});
+
+// Initialize and fetch entitlements
+await revstack.init();
+```
+
+<Warning>
+Use your **public key** for client-side SDKs. Never expose your secret key in the browser.
+</Warning>
+
+### 2. Check entitlements
+
+```javascript
+const feature = revstack.getEntitlement("premium-feature");
+
+if (feature.hasAccess) {
+  console.log("User has access to premium features!");
+} else {
+  console.log("Access denied. Show paywall.");
+}
+```
+
+## Configuration
+
+### RevstackClient Options
+
+```typescript
+interface RevstackConfig {
+  /** Project public key from Revstack Dashboard */
+  publicKey: string;
+
+  /** Function that returns the current user's JWT token */
+  getToken: () => Promise<string | null>;
+
+  /** API base URL (optional) */
+  apiUrl?: string;
+
+  /** Custom guest ID resolver — overrides fingerprinting (optional) */
+  getGuestId?: () => Promise<string>;
+
+  /** Disable browser fingerprinting (optional) */
+  disableFingerprint?: boolean;
+}
+```
+
+### Example Configuration
+
+```javascript
+const revstack = new RevstackClient({
+  publicKey: "pk_live_...",
+  apiUrl: "https://api.custom.com", // optional
+  getToken: async () => {
+    const session = await fetchSession();
+    return session?.token ?? null;
+  },
+  disableFingerprint: false, // optional
+});
+```
+
+## Core Methods
+
+### init()
+
+Initialize the client and fetch entitlements:
+
+```javascript
+try {
+  await revstack.init();
+  console.log("Revstack initialized");
+} catch (error) {
+  console.error("Failed to initialize:", error);
+}
+```
+
+<Info>
+Call `init()` once on app startup. The provider handles this automatically in React/Next.js.
+</Info>
+
+### getEntitlement(key)
+
+Get an entitlement from the local cache (synchronous):
+
+```javascript
+const analytics = revstack.getEntitlement("analytics");
+
+console.log(analytics.key);       // "analytics"
+console.log(analytics.hasAccess); // true or false
+console.log(analytics.value);     // optional limit/value
+```
+
+**Returns:**
+
+```typescript
+interface Entitlement {
+  key: string;
+  hasAccess: boolean;
+  value?: string | number | boolean;
+}
+```
+
+If the entitlement key doesn't exist, returns `{ key, hasAccess: false }`.
+
+### hasAccess(key)
+
+Check if the user has access to a feature (boolean shorthand):
+
+```javascript
+if (revstack.hasAccess("premium-feature")) {
+  showPremiumContent();
+} else {
+  showPaywall();
+}
+```
+
+### startCheckout(params)
+
+Start a checkout session and redirect to the payment page:
+
+```javascript
+await revstack.startCheckout({
+  planId: "plan_pro",
+  successUrl: "https://yourapp.com/dashboard?success=true",
+  cancelUrl: "https://yourapp.com/pricing",
+});
+
+// User is redirected to https://checkout.revstack.dev
+```
+
+**Parameters:**
+
+```typescript
+interface CheckoutParams {
+  planId: string;       // Plan to subscribe to
+  successUrl: string;   // Redirect after successful payment
+  cancelUrl: string;    // Redirect on cancellation
+}
+```
+
+### openBillingPortal(params)
+
+Open the billing portal for subscription management:
+
+```javascript
+await revstack.openBillingPortal({
+  returnUrl: window.location.href,
+});
+
+// User is redirected to the billing portal
+```
+
+**Parameters:**
+
+```typescript
+interface BillingPortalParams {
+  returnUrl: string; // URL to return to after leaving the portal
+}
+```
+
+## Client Properties
+
+### isInitialized
+
+Check if the client has successfully initialized:
+
+```javascript
+if (revstack.isInitialized) {
+  console.log("Ready to check entitlements");
+}
+```
+
+### isReady
+
+Check if initialization has completed (success or failure):
+
+```javascript
+if (!revstack.isReady) {
+  showLoadingSpinner();
+}
+```
+
+## Reactivity (Advanced)
+
+The browser SDK implements the **external store protocol** for use with React hooks.
+
+### subscribe(listener)
+
+Subscribe to entitlement changes:
+
+```javascript
+const unsubscribe = revstack.subscribe(() => {
+  console.log("Entitlements updated!");
+  render();
+});
+
+// Later: cleanup
+unsubscribe();
+```
+
+### getSnapshot()
+
+Get the current version number (for change detection):
+
+```javascript
+const version = revstack.getSnapshot();
+console.log("Current version:", version);
+```
+
+<Info>
+React hooks like `useEntitlement` use `subscribe` and `getSnapshot` internally.
+</Info>
+
+## Usage Patterns
+
+### Feature Gating
+
+```javascript
+function renderDashboard() {
+  const analytics = revstack.getEntitlement("analytics");
+  const exports = revstack.getEntitlement("data-exports");
+
+  let html = "<h1>Dashboard</h1>";
+
+  if (analytics.hasAccess) {
+    html += "<section><h2>Analytics</h2><div id='charts'></div></section>";
+  }
+
+  if (exports.hasAccess) {
+    html += "<button id='export-btn'>Export Data</button>";
+  } else {
+    html += "<a href='/pricing'>Upgrade to export data</a>";
+  }
+
+  document.getElementById("app").innerHTML = html;
+}
+```
+
+### Pricing Page
+
+```javascript
+function renderPricingCard(plan) {
+  return `
+    <div class="pricing-card">
+      <h3>${plan.name}</h3>
+      <p>${plan.price}</p>
+      <button onclick="subscribe('${plan.id}')">Subscribe</button>
+    </div>
+  `;
+}
+
+async function subscribe(planId) {
+  await revstack.startCheckout({
+    planId,
+    successUrl: window.location.origin + "/dashboard",
+    cancelUrl: window.location.href,
+  });
+}
+```
+
+### Settings Page
+
+```javascript
+function renderSettings() {
+  return `
+    <div>
+      <h2>Billing Settings</h2>
+      <button onclick="openBilling()">Manage Subscription</button>
+    </div>
+  `;
+}
+
+async function openBilling() {
+  await revstack.openBillingPortal({
+    returnUrl: window.location.href,
+  });
+}
+```
+
+## Framework Integration
+
+### Vanilla JavaScript
+
+```javascript
+import { RevstackClient } from "@revstackhq/browser";
+
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => localStorage.getItem("token"),
+});
+
+async function init() {
+  await revstack.init();
+  render();
+}
+
+function render() {
+  const feature = revstack.getEntitlement("premium");
+  document.getElementById("content").innerHTML = feature.hasAccess
+    ? "<div>Premium Content</div>"
+    : "<div>Upgrade to access</div>";
+}
+
+init();
+```
+
+### Vue.js
+
+```vue
+<script setup>
+import { ref, onMounted } from "vue";
+import { RevstackClient } from "@revstackhq/browser";
+
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => localStorage.getItem("token"),
+});
+
+const feature = ref({ key: "premium", hasAccess: false });
+
+onMounted(async () => {
+  await revstack.init();
+  feature.value = revstack.getEntitlement("premium");
+
+  // Subscribe to changes
+  revstack.subscribe(() => {
+    feature.value = revstack.getEntitlement("premium");
+  });
+});
+</script>
+
+<template>
+  <div v-if="feature.hasAccess">
+    <h1>Premium Content</h1>
+  </div>
+  <div v-else>
+    <a href="/pricing">Upgrade to Premium</a>
+  </div>
+</template>
+```
+
+### Svelte
+
+```svelte
+<script>
+  import { onMount } from "svelte";
+  import { RevstackClient } from "@revstackhq/browser";
+
+  const revstack = new RevstackClient({
+    publicKey: "pk_...",
+    getToken: async () => localStorage.getItem("token"),
+  });
+
+  let feature = { key: "premium", hasAccess: false };
+
+  onMount(async () => {
+    await revstack.init();
+    feature = revstack.getEntitlement("premium");
+
+    revstack.subscribe(() => {
+      feature = revstack.getEntitlement("premium");
+    });
+  });
+</script>
+
+{#if feature.hasAccess}
+  <h1>Premium Content</h1>
+{:else}
+  <a href="/pricing">Upgrade to Premium</a>
+{/if}
+```
+
+## Authentication Integration
+
+The `getToken` function should return the current user's JWT:
+
+<CodeGroup>
+```javascript Auth0
+import { createAuth0Client } from "@auth0/auth0-spa-js";
+
+const auth0 = await createAuth0Client({
+  domain: "your-domain.auth0.com",
+  client_id: "your-client-id",
+});
+
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => {
+    try {
+      return await auth0.getTokenSilently();
+    } catch {
+      return null;
+    }
+  },
+});
+```
+
+```javascript Supabase
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient("https://...", "public-key");
+
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.access_token ?? null;
+  },
+});
+```
+
+```javascript Firebase
+import { getAuth } from "firebase/auth";
+
+const auth = getAuth();
+
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => {
+    const user = auth.currentUser;
+    return user ? await user.getIdToken() : null;
+  },
+});
+```
+</CodeGroup>
+
+## Anonymous Users
+
+The SDK automatically fingerprints anonymous users for entitlement tracking.
+
+### Custom Guest ID
+
+Provide your own anonymous user ID:
+
+```javascript
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => null,
+  getGuestId: async () => {
+    return localStorage.getItem("anonymous_id");
+  },
+});
+```
+
+### Disable Fingerprinting
+
+For privacy-sensitive applications:
+
+```javascript
+const revstack = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async () => token,
+  disableFingerprint: true,
+});
+```
+
+<Warning>
+Disabling fingerprinting means unauthenticated users won't have entitlements.
+</Warning>
+
+## TypeScript Support
+
+Full type definitions included:
+
+```typescript
+import {
+  RevstackClient,
+  type RevstackConfig,
+  type Entitlement,
+  type CheckoutParams,
+} from "@revstackhq/browser";
+
+const revstack: RevstackClient = new RevstackClient({
+  publicKey: "pk_...",
+  getToken: async (): Promise<string | null> => {
+    return localStorage.getItem("token");
+  },
+});
+
+const feature: Entitlement = revstack.getEntitlement("premium");
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="React SDK" icon="react" href="/sdks/react">
+    Use React hooks for better integration
+  </Card>
+  <Card title="Next.js SDK" icon="grid" href="/sdks/next">
+    Server and client components for Next.js
+  </Card>
+  <Card title="Entitlements" icon="key" href="/concepts/entitlements">
+    Learn about feature gating and access control
+  </Card>
+  <Card title="Subscriptions" icon="credit-card" href="/concepts/subscriptions">
+    Build subscription checkout flows
+  </Card>
+</CardGroup>

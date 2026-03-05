@@ -1,0 +1,314 @@
+---
+title: "Usage"
+description: "Report and query metered feature usage"
+---
+
+## Overview
+
+The `UsageClient` provides methods for reporting and querying metered feature usage. It works in conjunction with the `EntitlementsClient` — report usage after a successful entitlement check, and revert it if downstream operations fail.
+
+## Methods
+
+### report()
+
+Report usage of a metered feature. Increments the customer's usage meter.
+
+```typescript
+const result = await revstack.usage.report(params);
+```
+
+<ParamField path="params" type="ReportUsageParams" required>
+  Usage report parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string" required>
+      The customer who consumed the feature.
+      
+      **Example:** `"usr_abc123"`
+    </ParamField>
+    
+    <ParamField path="featureId" type="string" required>
+      The entitlement slug or ID being consumed.
+      
+      **Example:** `"api-calls"` or `"ent_abc123"`
+    </ParamField>
+    
+    <ParamField path="amount" type="number" required>
+      Amount of usage to report.
+      
+      **Example:** `10` (for 10 API calls)
+    </ParamField>
+    
+    <ParamField path="idempotencyKey" type="string">
+      Idempotency key to prevent duplicate reports.
+      
+      **Example:** `"req_abc123"`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="object">
+  <ResponseField name="success" type="boolean">
+    Confirmation of the reported usage.
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const { success } = await revstack.usage.report({
+  customerId: "usr_abc123",
+  featureId: "api-calls",
+  amount: 10,
+  idempotencyKey: "req_xyz",
+});
+
+if (success) {
+  console.log("Usage reported successfully");
+}
+```
+
+---
+
+### revert()
+
+Revert (roll back) previously reported usage. Decrements the customer's usage meter. Essential for maintaining accurate billing when downstream operations fail after usage was already recorded.
+
+```typescript
+const result = await revstack.usage.revert(params);
+```
+
+<ParamField path="params" type="RevertUsageParams" required>
+  Revert parameters including reason for audit trail.
+  
+  <Expandable title="properties">
+    <ParamField path="customerId" type="string" required>
+      The customer whose usage to revert.
+    </ParamField>
+    
+    <ParamField path="featureId" type="string" required>
+      The entitlement slug or ID to revert usage for.
+    </ParamField>
+    
+    <ParamField path="amount" type="number" required>
+      Amount of usage to revert (positive number).
+    </ParamField>
+    
+    <ParamField path="idempotencyKey" type="string">
+      Idempotency key to prevent double-reverts.
+    </ParamField>
+    
+    <ParamField path="reason" type="string">
+      Audit reason for the revert.
+      
+      **Example:** `"downstream_failure"`, `"user_error"`
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="object">
+  <ResponseField name="success" type="boolean">
+    Confirmation of the reverted usage.
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+// Revert usage after an OpenAI call fails
+await revstack.usage.revert({
+  customerId: "usr_abc123",
+  featureId: "ai-tokens",
+  amount: 500,
+  reason: "downstream_failure",
+});
+```
+
+---
+
+### getMeters()
+
+Retrieve all usage meters for a customer (one per metered entitlement).
+
+```typescript
+const meters = await revstack.usage.getMeters(customerId);
+```
+
+<ParamField path="customerId" type="string" required>
+  The customer whose meters to retrieve.
+  
+  **Example:** `"usr_abc123"`
+</ParamField>
+
+<ResponseField name="meters" type="UsageMeter[]">
+  Array of usage meters with current counts and reset times.
+  
+  <Expandable title="UsageMeter properties">
+    <ResponseField name="id" type="string">
+      Unique identifier with `meter_` prefix.
+    </ResponseField>
+    
+    <ResponseField name="appUserId" type="string">
+      The customer this meter belongs to.
+    </ResponseField>
+    
+    <ResponseField name="entitlementId" type="string">
+      The entitlement being metered.
+    </ResponseField>
+    
+    <ResponseField name="currentUsage" type="number">
+      Current usage count within the billing period.
+    </ResponseField>
+    
+    <ResponseField name="lastEventAt" type="string">
+      ISO 8601 timestamp of the last recorded usage event.
+    </ResponseField>
+    
+    <ResponseField name="resetAt" type="string">
+      ISO 8601 timestamp of when the meter will reset.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const meters = await revstack.usage.getMeters("usr_abc123");
+
+for (const meter of meters) {
+  console.log(
+    `Entitlement ${meter.entitlementId}: ${meter.currentUsage} used`
+  );
+}
+```
+
+---
+
+### getMeter()
+
+Retrieve a single usage meter for a specific customer and feature.
+
+```typescript
+const meter = await revstack.usage.getMeter(customerId, featureId);
+```
+
+<ParamField path="customerId" type="string" required>
+  The customer whose meter to retrieve.
+</ParamField>
+
+<ParamField path="featureId" type="string" required>
+  The entitlement slug or ID.
+</ParamField>
+
+<ResponseField name="meter" type="UsageMeter">
+  The usage meter with current count and reset time.
+</ResponseField>
+
+**Example:**
+
+```typescript
+const meter = await revstack.usage.getMeter(
+  "usr_abc123",
+  "api-calls"
+);
+
+console.log(`API Calls: ${meter.currentUsage}`);
+console.log(`Resets at: ${meter.resetAt}`);
+```
+
+## Usage Patterns
+
+### Optimistic Usage Pattern
+
+For operations where you need to check limits before execution:
+
+```typescript
+// 1. Check entitlement
+const { allowed } = await revstack.entitlements.check(
+  userId,
+  "ai-tokens",
+  { amount: 500 }
+);
+
+if (!allowed) {
+  throw new Error("Insufficient tokens");
+}
+
+// 2. Report usage immediately
+await revstack.usage.report({
+  customerId: userId,
+  featureId: "ai-tokens",
+  amount: 500,
+});
+
+// 3. Perform the operation
+try {
+  await openai.chat.completions.create({ ... });
+} catch (error) {
+  // 4. Revert if operation fails
+  await revstack.usage.revert({
+    customerId: userId,
+    featureId: "ai-tokens",
+    amount: 500,
+    reason: "downstream_failure",
+  });
+  throw error;
+}
+```
+
+### Pessimistic Usage Pattern
+
+For operations where you know the exact usage after execution:
+
+```typescript
+try {
+  // 1. Perform the operation
+  const result = await expensiveOperation();
+  
+  // 2. Report actual usage after success
+  await revstack.usage.report({
+    customerId: userId,
+    featureId: "api-calls",
+    amount: result.callsMade,
+  });
+  
+  return result;
+} catch (error) {
+  // No usage to revert since we didn't report any
+  throw error;
+}
+```
+
+### Idempotent Usage Reporting
+
+```typescript
+import { v4 as uuidv4 } from "uuid";
+
+// Generate idempotency key from request ID
+const idempotencyKey = `usage_${requestId}`;
+
+await revstack.usage.report({
+  customerId: userId,
+  featureId: "api-calls",
+  amount: 1,
+  idempotencyKey, // Prevents duplicate charges on retries
+});
+```
+
+### Display Current Usage
+
+```typescript
+// Get all meters for a customer
+const meters = await revstack.usage.getMeters(userId);
+
+// Display in a usage dashboard
+for (const meter of meters) {
+  const entitlement = await revstack.entitlements.get(
+    meter.entitlementId
+  );
+  
+  console.log(`${entitlement.name}:`);
+  console.log(`  Current: ${meter.currentUsage}`);
+  console.log(`  Resets: ${new Date(meter.resetAt).toLocaleDateString()}`);
+}
+```

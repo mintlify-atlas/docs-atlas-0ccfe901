@@ -1,0 +1,169 @@
+---
+title: "Revstack Client"
+description: "Initialize and configure the Revstack Node SDK client"
+---
+
+## Overview
+
+The `Revstack` class is the main entry point for the Node SDK. Initialize it with your secret API key to access all SDK modules.
+
+## Constructor
+
+### new Revstack(options)
+
+Creates a new Revstack SDK instance.
+
+<ParamField path="options" type="RevstackOptions" required>
+  Configuration options for the SDK client.
+  
+  <Expandable title="properties">
+    <ParamField path="secretKey" type="string" required>
+      Secret API key. Obtain yours at [https://app.revstack.dev](https://app.revstack.dev).
+      
+      **Example:** `"sk_live_..."`
+    </ParamField>
+    
+    <ParamField path="baseUrl" type="string">
+      Base URL for the Revstack API. 
+      
+      **Default:** `"https://app.revstack.dev/api/v1"`
+    </ParamField>
+    
+    <ParamField path="timeout" type="number">
+      Request timeout in milliseconds.
+      
+      **Default:** `10000` (10 seconds)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="revstack" type="Revstack">
+  Returns a configured Revstack client instance with access to all modules.
+</ResponseField>
+
+## Client Modules
+
+The Revstack client provides access to the following modules:
+
+### Data Plane (Daily Operations)
+
+<ResponseField name="customers" type="CustomersClient">
+  Manage end-user (customer) records.
+  
+  [View documentation →](/api/node/customers)
+</ResponseField>
+
+<ResponseField name="subscriptions" type="SubscriptionsClient">
+  Create, cancel, and manage subscriptions.
+  
+  [View documentation →](/api/node/subscriptions)
+</ResponseField>
+
+<ResponseField name="entitlements" type="EntitlementsClient">
+  Check feature access and query entitlements.
+  
+  [View documentation →](/api/node/entitlements)
+</ResponseField>
+
+<ResponseField name="usage" type="UsageClient">
+  Report and query metered feature usage.
+  
+  [View documentation →](/api/node/usage)
+</ResponseField>
+
+<ResponseField name="wallets" type="WalletsClient">
+  Manage customer wallet balances.
+  
+  [View documentation →](/api/node/wallets)
+</ResponseField>
+
+<ResponseField name="plans" type="PlansClient">
+  Query billing plans (read-only).
+  
+  [View documentation →](/api/node/plans)
+</ResponseField>
+
+<ResponseField name="invoices" type="InvoicesClient">
+  Query billing invoices (read-only).
+  
+  [View documentation →](/api/node/invoices)
+</ResponseField>
+
+<ResponseField name="webhooks" type="WebhooksClient">
+  Verify inbound webhook signatures.
+  
+  [View documentation →](/api/node/webhooks)
+</ResponseField>
+
+### Control Plane (Administration)
+
+<ResponseField name="admin" type="AdminClient">
+  Administrative operations for plans, entitlements, integrations, and environments.
+  
+  [View documentation →](/api/node/admin)
+</ResponseField>
+
+## Usage Example
+
+```typescript
+import { Revstack } from "@revstackhq/node";
+
+// Initialize the client
+const revstack = new Revstack({
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+});
+
+// Data Plane: Check entitlements
+const { allowed } = await revstack.entitlements.check(
+  "usr_abc",
+  "api-calls"
+);
+
+if (!allowed) {
+  throw new Error("Feature not available on your plan");
+}
+
+// Control Plane: Manage plans via admin
+await revstack.admin.plans.upsert({
+  slug: "pro",
+  name: "Pro",
+  prices: [{ amount: 4900, currency: "USD", billingInterval: "month" }],
+});
+```
+
+## Error Handling
+
+The SDK throws typed errors that you can catch and handle:
+
+```typescript
+import { 
+  Revstack, 
+  RevstackError, 
+  RevstackAPIError, 
+  RateLimitError 
+} from "@revstackhq/node";
+
+try {
+  const customer = await revstack.customers.get("usr_abc");
+} catch (error) {
+  if (error instanceof RateLimitError) {
+    console.error("Rate limit exceeded");
+  } else if (error instanceof RevstackAPIError) {
+    console.error(`API error: ${error.message}`);
+  }
+}
+```
+
+## TypeScript Support
+
+The SDK is written in TypeScript and includes comprehensive type definitions:
+
+```typescript
+import type { 
+  Customer, 
+  Subscription, 
+  Entitlement,
+  Plan,
+  Invoice
+} from "@revstackhq/node";
+```

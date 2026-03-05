@@ -1,0 +1,280 @@
+---
+title: "Clerk Integration"
+description: "Verify Clerk JWTs in your Revstack application"
+---
+
+## Overview
+
+Clerk is a modern authentication and user management platform that uses RS256 signing with JWKS for token verification. This guide shows you how to integrate Clerk authentication with Revstack.
+
+## Prerequisites
+
+- A Clerk account and application
+- Clerk session tokens being issued to your frontend
+- Your Clerk issuer URL (also known as Frontend API URL)
+
+## Installation
+
+```bash
+npm install @revstackhq/auth
+```
+
+## Configuration
+
+### 1. Get your Clerk issuer URL
+
+From your Clerk dashboard:
+
+1. Go to **API Keys**
+2. Copy your **Issuer URL** (e.g., `https://clerk.your-domain.com` or `https://your-app.clerk.accounts.dev`)
+
+<Note>
+The issuer URL is the same as your **Frontend API URL** in Clerk's dashboard.
+</Note>
+
+### 2. Build the auth contract
+
+Create an auth contract using your Clerk configuration:
+
+```typescript
+import { buildAuthContract } from "@revstackhq/auth";
+
+const authContract = buildAuthContract("clerk", {
+  issuerUrl: "https://clerk.your-domain.com",
+});
+```
+
+The contract builder automatically:
+- Sets the JWKS URI to `https://clerk.your-domain.com/.well-known/jwks.json`
+- Sets the issuer to match your issuer URL
+- Configures RS256 verification strategy
+
+## Verification
+
+### Initialize the verifier
+
+```typescript
+import { RevstackAuth } from "@revstackhq/auth";
+
+const auth = new RevstackAuth(authContract);
+```
+
+### Verify tokens
+
+In your API routes or middleware:
+
+```typescript
+export async function authMiddleware(req, res, next) {
+  const session = await auth.validate(req.headers.authorization);
+
+  if (!session.isValid) {
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Attach user info to request
+  req.userId = session.userId; // Clerk user ID (e.g., "user_2xM...")
+  req.claims = session.claims; // Full JWT payload
+  
+  next();
+}
+```
+
+## Token structure
+
+Clerk session tokens contain standard OIDC claims plus Clerk-specific metadata:
+
+```json
+{
+  "iss": "https://clerk.your-domain.com",
+  "sub": "user_2xMPL1f2Q3Z4z5R6W7S8T9",
+  "azp": "https://your-app.com",
+  "iat": 1516239022,
+  "exp": 1516242622,
+  "sid": "sess_2xMPL1f2Q3Z4z5R6W7S8T9",
+  "organization_id": "org_2xMPL1f2Q3Z4z5R6W7S8T9"
+}
+```
+
+### Accessing Clerk metadata
+
+Clerk includes additional metadata in the JWT that you can access via typed claims:
+
+```typescript
+interface ClerkClaims {
+  sid: string; // Session ID
+  organization_id?: string; // Organization ID (if using Clerk Organizations)
+  metadata?: Record<string, any>; // Public metadata
+}
+
+const session = await auth.validate<ClerkClaims>(token);
+
+if (session.isValid) {
+  console.log(session.userId); // "user_2xM..."
+  console.log(session.claims.sid); // "sess_2xM..."
+  console.log(session.claims.organization_id); // "org_2xM..."
+}
+```
+
+## Custom user ID claim
+
+By default, Revstack uses the `sub` claim (Clerk user ID). If you need to use a different claim:
+
+```typescript
+const authContract = buildAuthContract("clerk", {
+  issuerUrl: "https://clerk.your-domain.com",
+  userIdClaim: "organization_id", // Use org ID instead of user ID
+});
+```
+
+## Complete example
+
+Here's a full Next.js API route integration:
+
+```typescript
+// pages/api/profile.ts
+import { NextApiRequest, NextApiResponse } from "next";
+import { buildAuthContract, RevstackAuth, AuthErrorCode } from "@revstackhq/auth";
+
+// Build contract once at module level
+const authContract = buildAuthContract("clerk", {
+  issuerUrl: process.env.CLERK_ISSUER_URL!,
+});
+
+const auth = new RevstackAuth(authContract);
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  const session = await auth.validate(req.headers.authorization);
+
+  if (!session.isValid) {
+    if (session.errorCode === AuthErrorCode.TOKEN_EXPIRED) {
+      return res.status(401).json({ 
+        error: "Session expired. Please sign in again." 
+      });
+    }
+    
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Use the verified user ID
+  const userData = {
+    userId: session.userId,
+    sessionId: session.claims.sid,
+  };
+
+  return res.status(200).json(userData);
+}
+```
+
+## Frontend integration
+
+When calling your API from a Clerk-enabled frontend:
+
+```typescript
+// Using Clerk React
+import { useAuth } from "@clerk/clerk-react";
+
+function MyComponent() {
+  const { getToken } = useAuth();
+
+  async function callAPI() {
+    const token = await getToken();
+    
+    const response = await fetch("/api/profile", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    
+    return response.json();
+  }
+}
+```
+
+## Multi-session support
+
+If you're using Clerk's multi-session feature, each session token will have a unique `sid` claim:
+
+```typescript
+const session = await auth.validate(token);
+
+if (session.isValid) {
+  // Store session ID to track which session is active
+  const sessionId = session.claims.sid;
+  
+  // Link billing data to specific session if needed
+  await linkSubscriptionToSession(session.userId, sessionId);
+}
+```
+
+## Organization support
+
+When using Clerk Organizations, the `organization_id` claim is automatically included:
+
+```typescript
+const session = await auth.validate(token);
+
+if (session.isValid && session.claims.organization_id) {
+  // User is in an organization context
+  console.log("Org ID:", session.claims.organization_id);
+  
+  // You can link subscriptions to organizations
+  await getOrgSubscription(session.claims.organization_id);
+}
+```
+
+## Environment variables
+
+Store your Clerk configuration in environment variables:
+
+```bash
+# .env.local (Next.js)
+CLERK_ISSUER_URL=https://clerk.your-domain.com
+
+# Or for Clerk development instances:
+CLERK_ISSUER_URL=https://your-app.clerk.accounts.dev
+```
+
+## Testing
+
+To test your integration:
+
+1. Sign in via your Clerk-enabled frontend
+2. Obtain the session token using `getToken()` from Clerk's SDK
+3. Send it in the Authorization header: `Bearer <token>`
+4. Verify the token is validated correctly
+
+## Troubleshooting
+
+### "Issuer mismatch" error
+
+Ensure your `issuerUrl` exactly matches the issuer in your Clerk tokens. You can decode a token at [jwt.io](https://jwt.io) to verify the `iss` claim.
+
+### "Invalid signature" error
+
+Verify that:
+- The token was issued by your Clerk application
+- The JWKS endpoint is accessible at `<issuerUrl>/.well-known/jwks.json`
+- The token hasn't expired or been tampered with
+
+### Development vs. production URLs
+
+Clerk uses different issuer URLs for development and production:
+- **Development:** `https://your-app.clerk.accounts.dev`
+- **Production:** `https://clerk.your-domain.com`
+
+Make sure you're using the correct URL for your environment.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Auth Overview" icon="book" href="/auth/overview">
+    Learn more about JWT verification in Revstack
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation" href="/auth/overview#error-handling">
+    Handle authentication errors gracefully
+  </Card>
+</CardGroup>

@@ -1,0 +1,353 @@
+---
+title: "Supabase Integration"
+description: "Verify Supabase Auth JWTs in your Revstack application"
+---
+
+## Overview
+
+Supabase Auth supports both RS256 (JWKS) and HS256 (shared secret) verification strategies. This guide shows you how to integrate Supabase authentication with Revstack using either approach.
+
+## Prerequisites
+
+- A Supabase project
+- Your Supabase project URL
+- (Optional) Your JWT secret for HS256 verification
+
+## Installation
+
+```bash
+npm install @revstackhq/auth
+```
+
+## Configuration options
+
+Supabase offers two verification strategies:
+
+### Option 1: RS256 with JWKS (Recommended)
+
+Verify tokens using Supabase's public JWKS endpoint. This is more secure as the signing secret never leaves Supabase.
+
+```typescript
+import { buildAuthContract } from "@revstackhq/auth";
+
+const authContract = buildAuthContract("supabase", {
+  projectUrl: "https://xyzcompany.supabase.co",
+});
+```
+
+This automatically:
+- Sets the JWKS URI to `https://xyzcompany.supabase.co/rest/v1/auth/jwks`
+- Sets the issuer to `https://xyzcompany.supabase.co/auth/v1`
+- Configures RS256 verification strategy
+
+### Option 2: HS256 with shared secret
+
+Verify tokens using your Supabase JWT secret. This requires storing the secret securely in your environment.
+
+```typescript
+import { buildAuthContract } from "@revstackhq/auth";
+
+const authContract = buildAuthContract("supabase", {
+  projectUrl: "https://xyzcompany.supabase.co",
+  signingSecret: process.env.SUPABASE_JWT_SECRET!, // Your JWT secret
+});
+```
+
+This automatically:
+- Sets the strategy to HS256
+- Uses the signing secret for verification
+- Sets the issuer to `https://xyzcompany.supabase.co/auth/v1`
+
+<Note>
+You can find your JWT secret in the Supabase dashboard under **Settings** → **API** → **JWT Settings** → **JWT Secret**.
+</Note>
+
+## Verification
+
+### Initialize the verifier
+
+The verification code is identical regardless of which strategy you chose:
+
+```typescript
+import { RevstackAuth } from "@revstackhq/auth";
+
+const auth = new RevstackAuth(authContract);
+```
+
+### Verify tokens
+
+In your API routes or middleware:
+
+```typescript
+export async function authMiddleware(req, res, next) {
+  const session = await auth.validate(req.headers.authorization);
+
+  if (!session.isValid) {
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Attach user info to request
+  req.userId = session.userId; // Supabase user UUID
+  req.claims = session.claims; // Full JWT payload
+  
+  next();
+}
+```
+
+## Token structure
+
+Supabase Auth JWTs contain standard claims plus Supabase-specific metadata:
+
+```json
+{
+  "iss": "https://xyzcompany.supabase.co/auth/v1",
+  "sub": "123e4567-e89b-12d3-a456-426614174000",
+  "aud": "authenticated",
+  "email": "user@example.com",
+  "phone": "",
+  "app_metadata": {
+    "provider": "email",
+    "providers": ["email"]
+  },
+  "user_metadata": {
+    "name": "John Doe"
+  },
+  "role": "authenticated",
+  "aal": "aal1",
+  "session_id": "abcd-1234-efgh-5678",
+  "iat": 1516239022,
+  "exp": 1516242622
+}
+```
+
+### Accessing Supabase metadata
+
+You can access Supabase-specific claims using typed interfaces:
+
+```typescript
+interface SupabaseClaims {
+  email?: string;
+  phone?: string;
+  app_metadata?: {
+    provider: string;
+    providers: string[];
+  };
+  user_metadata?: Record<string, any>;
+  role: string;
+  aal: string;
+  session_id?: string;
+}
+
+const session = await auth.validate<SupabaseClaims>(token);
+
+if (session.isValid) {
+  console.log(session.userId); // "123e4567-e89b-12d3-a456-426614174000"
+  console.log(session.claims.email); // "user@example.com"
+  console.log(session.claims.user_metadata); // { name: "John Doe" }
+}
+```
+
+## Custom audience
+
+If you've configured a custom audience in your Supabase project:
+
+```typescript
+const authContract = buildAuthContract("supabase", {
+  projectUrl: "https://xyzcompany.supabase.co",
+  audience: "your-custom-audience",
+});
+```
+
+## Complete example
+
+Here's a full Express.js integration with RS256:
+
+```typescript
+import express from "express";
+import { buildAuthContract, RevstackAuth, AuthErrorCode } from "@revstackhq/auth";
+
+// Build contract once at startup
+const authContract = buildAuthContract("supabase", {
+  projectUrl: process.env.SUPABASE_PROJECT_URL!,
+  // Optional: use HS256 instead
+  // signingSecret: process.env.SUPABASE_JWT_SECRET,
+});
+
+const auth = new RevstackAuth(authContract);
+
+const app = express();
+
+// Auth middleware
+app.use(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader) {
+    return res.status(401).json({ error: "Missing authorization header" });
+  }
+
+  const session = await auth.validate(authHeader);
+
+  if (!session.isValid) {
+    if (session.errorCode === AuthErrorCode.TOKEN_EXPIRED) {
+      return res.status(401).json({ 
+        error: "Session expired",
+        code: "session_expired" 
+      });
+    }
+    
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Store user info on request
+  req.userId = session.userId;
+  req.email = session.claims.email;
+  
+  next();
+});
+
+// Protected route
+app.get("/api/profile", (req, res) => {
+  res.json({
+    userId: req.userId,
+    email: req.email,
+  });
+});
+
+app.listen(3000);
+```
+
+## Frontend integration
+
+When calling your API from a Supabase-enabled frontend:
+
+```typescript
+import { createClient } from "@supabase/supabase-js";
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+async function callAPI() {
+  const { data: { session } } = await supabase.auth.getSession();
+  
+  if (!session) {
+    throw new Error("Not authenticated");
+  }
+  
+  const response = await fetch("/api/profile", {
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  });
+  
+  return response.json();
+}
+```
+
+## Row Level Security (RLS) integration
+
+If you're using Supabase's Row Level Security, you can pass the verified user ID to your Supabase client:
+
+```typescript
+import { createClient } from "@supabase/supabase-js";
+
+// After validating the token
+const session = await auth.validate(token);
+
+if (session.isValid) {
+  // Create a Supabase client with the service role key
+  const supabase = createClient(
+    process.env.SUPABASE_PROJECT_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    {
+      global: {
+        headers: {
+          // Set the user context for RLS
+          'x-supabase-user-id': session.userId,
+        },
+      },
+    }
+  );
+  
+  // Now RLS policies will use this user ID
+  const { data } = await supabase
+    .from('subscriptions')
+    .select('*')
+    .eq('user_id', session.userId);
+}
+```
+
+## Environment variables
+
+Store your Supabase configuration in environment variables:
+
+```bash
+# .env
+SUPABASE_PROJECT_URL=https://xyzcompany.supabase.co
+
+# Only needed for HS256 verification
+SUPABASE_JWT_SECRET=your-jwt-secret-here
+
+# For RLS integration
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+```
+
+## RS256 vs HS256: Which to choose?
+
+**Use RS256 (JWKS) when:**
+- You want to avoid storing secrets in your backend
+- You're running in a serverless environment
+- You want automatic key rotation support
+- Security is a top priority
+
+**Use HS256 (shared secret) when:**
+- You need slightly faster verification
+- You're already managing secrets securely
+- You want to avoid external JWKS requests
+- You have a simple deployment architecture
+
+<Tip>
+For most applications, **RS256 is recommended** as it's more secure and doesn't require managing the JWT secret.
+</Tip>
+
+## Testing
+
+To test your integration:
+
+1. Sign in via your Supabase-enabled frontend
+2. Obtain the session token using `supabase.auth.getSession()`
+3. Send the `access_token` in the Authorization header: `Bearer <token>`
+4. Verify the token is validated correctly
+
+## Troubleshooting
+
+### "Invalid signature" error (HS256)
+
+Verify that:
+- You're using the correct JWT secret from your Supabase dashboard
+- The secret hasn't been rotated or changed
+- You're using the secret for the correct project
+
+### "JWKS fetch failed" error (RS256)
+
+Check that:
+- Your Supabase project is running and accessible
+- The JWKS endpoint is not blocked by a firewall
+- Your network can reach `<projectUrl>/rest/v1/auth/jwks`
+
+### "Issuer mismatch" error
+
+Ensure your `projectUrl` exactly matches your Supabase project URL (e.g., `https://xyzcompany.supabase.co`).
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Auth Overview" icon="book" href="/auth/overview">
+    Learn more about JWT verification in Revstack
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation" href="/auth/overview#error-handling">
+    Handle authentication errors gracefully
+  </Card>
+</CardGroup>

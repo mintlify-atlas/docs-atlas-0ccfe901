@@ -1,0 +1,451 @@
+---
+title: "Admin"
+description: "Administrative operations for plans, entitlements, integrations, and environments"
+---
+
+## Overview
+
+The `AdminClient` provides access to Control Plane operations for managing your Revstack infrastructure. It includes submodules for managing plans, entitlements, integrations, and environments.
+
+## Submodules
+
+### admin.plans
+
+Manage billing plans with full CRUD operations and idempotent upserts.
+
+```typescript
+revstack.admin.plans
+```
+
+**Methods:**
+- `list(params?)` - List all plans with optional filters
+- `get(planId)` - Retrieve a plan by ID with nested prices and entitlements
+- `create(params)` - Create a new billing plan
+- `update(planId, params)` - Update an existing plan's attributes
+- `delete(planId)` - Delete a plan (fails if it has active subscriptions)
+- `upsert(params)` - Idempotently create or update a plan by slug
+
+**Example:**
+
+```typescript
+// Upsert a plan (used by CLI for Billing as Code)
+await revstack.admin.plans.upsert({
+  slug: "pro",
+  name: "Pro",
+  status: "active",
+  type: "paid",
+  prices: [
+    { amount: 4900, currency: "USD", billingInterval: "month" },
+    { amount: 49000, currency: "USD", billingInterval: "year" },
+  ],
+  entitlements: [
+    { entitlementSlug: "api-calls", valueLimit: 10000 },
+    { entitlementSlug: "advanced-analytics", valueBool: true },
+  ],
+});
+```
+
+[View full documentation →](#adminplans)
+
+---
+
+### admin.entitlements
+
+Manage entitlement definitions with full CRUD operations and idempotent upserts.
+
+```typescript
+revstack.admin.entitlements
+```
+
+**Methods:**
+- `list(params?)` - List all entitlement definitions
+- `get(entitlementId)` - Retrieve an entitlement definition by ID
+- `create(params)` - Create a new entitlement definition
+- `update(entitlementId, params)` - Update an existing entitlement
+- `delete(entitlementId)` - Delete an entitlement (fails if any plans reference it)
+- `upsert(params)` - Idempotently create or update an entitlement by slug
+
+**Example:**
+
+```typescript
+// Upsert an entitlement definition
+await revstack.admin.entitlements.upsert({
+  slug: "api-calls",
+  name: "API Calls",
+  type: "metered",
+  unitType: "count",
+});
+```
+
+[View full documentation →](#adminentitlements)
+
+---
+
+### admin.integrations
+
+Manage payment provider integrations (Stripe, Paddle, etc.) with CRUD operations and monitoring.
+
+```typescript
+revstack.admin.integrations
+```
+
+**Methods:**
+- `list(params?)` - List all integrations with optional filters
+- `get(integrationId)` - Retrieve an integration by ID
+- `create(params)` - Create a new payment provider integration
+- `update(integrationId, params)` - Update integration credentials or settings
+- `delete(integrationId)` - Delete an integration (stops webhook processing)
+- `listEvents(integrationId, params?)` - List webhook events received by an integration
+- `listMetrics(integrationId, params?)` - List hourly aggregated metrics
+
+**Example:**
+
+```typescript
+// Create a Stripe integration
+const integration = await revstack.admin.integrations.create({
+  provider: "stripe",
+  credentials: { apiKey: process.env.STRIPE_SECRET_KEY },
+  webhookSecret: process.env.STRIPE_WEBHOOK_SECRET,
+});
+
+// View recent webhook events
+const { data: events } = await revstack.admin.integrations.listEvents(
+  integration.id
+);
+```
+
+[View full documentation →](#adminintegrations)
+
+---
+
+### admin.environments
+
+Manage deployment environments with separate API keys and auth configurations.
+
+```typescript
+revstack.admin.environments
+```
+
+**Methods:**
+- `list(params?)` - List all environments
+- `get(environmentId)` - Retrieve an environment by ID
+- `create(params)` - Create a new deployment environment
+- `update(environmentId, params)` - Update environment name or auth config
+- `delete(environmentId)` - Delete an environment (invalidates API keys immediately)
+- `rotateKeys(environmentId)` - Rotate API keys for security
+
+**Example:**
+
+```typescript
+// Create a staging environment
+const env = await revstack.admin.environments.create({
+  name: "staging",
+  authProvider: "supabase",
+  authJwksUri: "https://my-project.supabase.co/.well-known/jwks.json",
+});
+
+console.log(`Public Key: ${env.apiKeyPublic}`);
+console.log(`Secret Key: ${env.apiKeySecret}`);
+```
+
+[View full documentation →](#adminenvironments)
+
+---
+
+## admin.plans
+
+### list()
+
+```typescript
+const response = await revstack.admin.plans.list(params);
+```
+
+<ParamField path="params" type="ListPlansParams">
+  Filter and pagination parameters (same as `revstack.plans.list()`).
+</ParamField>
+
+---
+
+### get()
+
+```typescript
+const plan = await revstack.admin.plans.get(planId);
+```
+
+<ParamField path="planId" type="string" required>
+  The plan's unique identifier.
+</ParamField>
+
+---
+
+### create()
+
+```typescript
+const plan = await revstack.admin.plans.create(params);
+```
+
+<ParamField path="params" type="CreatePlanParams" required>
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      Human-readable plan name.
+    </ParamField>
+    <ParamField path="slug" type="string" required>
+      URL-safe unique slug.
+    </ParamField>
+    <ParamField path="description" type="string">
+      Optional description for pricing pages.
+    </ParamField>
+    <ParamField path="status" type="string">
+      Plan status: `draft`, `active`, `archived`. Default: `draft`
+    </ParamField>
+    <ParamField path="type" type="string">
+      Plan type: `free`, `paid`, `custom`. Default: `paid`
+    </ParamField>
+    <ParamField path="metadata" type="Record<string, unknown>">
+      Arbitrary metadata.
+    </ParamField>
+    <ParamField path="isDefault" type="boolean">
+      Whether this is the default plan.
+    </ParamField>
+    <ParamField path="isPublic" type="boolean">
+      Whether this plan is publicly visible.
+    </ParamField>
+    <ParamField path="prices" type="UpsertPriceInput[]">
+      Prices to create alongside the plan.
+    </ParamField>
+    <ParamField path="entitlements" type="UpsertPlanEntitlementInput[]">
+      Entitlement allocations to create.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+### update()
+
+```typescript
+const plan = await revstack.admin.plans.update(planId, params);
+```
+
+Partially update a plan's attributes. Does not modify prices or entitlements — use `upsert()` for that.
+
+<ParamField path="planId" type="string" required>
+  The plan's unique identifier.
+</ParamField>
+
+<ParamField path="params" type="UpdatePlanParams" required>
+  Fields to update (all optional).
+</ParamField>
+
+---
+
+### delete()
+
+```typescript
+const result = await revstack.admin.plans.delete(planId);
+```
+
+Delete a plan. Fails if the plan has active subscriptions.
+
+---
+
+### upsert()
+
+```typescript
+const plan = await revstack.admin.plans.upsert(params);
+```
+
+Idempotently create or update a plan by its `slug`. This is the primary method used by the CLI for Billing as Code deployments.
+
+<ParamField path="params" type="UpsertPlanParams" required>
+  Full plan state including prices and entitlements. The `slug` acts as the idempotency key.
+</ParamField>
+
+---
+
+## admin.entitlements
+
+### upsert()
+
+```typescript
+const entitlement = await revstack.admin.entitlements.upsert(params);
+```
+
+<ParamField path="params" type="UpsertEntitlementParams" required>
+  <Expandable title="properties">
+    <ParamField path="slug" type="string" required>
+      URL-safe unique slug (acts as idempotency key).
+    </ParamField>
+    <ParamField path="name" type="string" required>
+      Human-readable name.
+    </ParamField>
+    <ParamField path="type" type="string" required>
+      Entitlement type: `boolean`, `metered`, `tiered`.
+    </ParamField>
+    <ParamField path="unitType" type="string">
+      Unit of measurement: `count`, `bytes`, `seconds`, etc.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+## admin.integrations
+
+### create()
+
+```typescript
+const integration = await revstack.admin.integrations.create(params);
+```
+
+<ParamField path="params" type="CreateIntegrationParams" required>
+  <Expandable title="properties">
+    <ParamField path="provider" type="string" required>
+      Payment provider name: `stripe`, `paddle`, etc.
+    </ParamField>
+    <ParamField path="credentials" type="Record<string, unknown>" required>
+      Provider credentials (API keys, tokens).
+    </ParamField>
+    <ParamField path="webhookSecret" type="string">
+      Webhook signing secret.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+### listEvents()
+
+```typescript
+const response = await revstack.admin.integrations.listEvents(
+  integrationId,
+  params
+);
+```
+
+List webhook events received by an integration. Useful for debugging.
+
+<ParamField path="integrationId" type="string" required>
+  The integration to query events for.
+</ParamField>
+
+<ParamField path="params" type="ListProviderEventsParams">
+  <Expandable title="properties">
+    <ParamField path="type" type="string">
+      Filter by event type.
+    </ParamField>
+    <ParamField path="status" type="string">
+      Filter by processing status: `ok`, `error`, `skipped`.
+    </ParamField>
+    <ParamField path="limit" type="number">
+      Maximum records to return.
+    </ParamField>
+    <ParamField path="offset" type="number">
+      Number of records to skip.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+### listMetrics()
+
+```typescript
+const response = await revstack.admin.integrations.listMetrics(
+  integrationId,
+  params
+);
+```
+
+List hourly aggregated metrics for an integration.
+
+<ParamField path="integrationId" type="string" required>
+  The integration to query metrics for.
+</ParamField>
+
+<ParamField path="params" type="ListMetricsParams">
+  <Expandable title="properties">
+    <ParamField path="from" type="string">
+      ISO 8601 start date for the time range.
+    </ParamField>
+    <ParamField path="to" type="string">
+      ISO 8601 end date for the time range.
+    </ParamField>
+    <ParamField path="limit" type="number">
+      Maximum records to return.
+    </ParamField>
+    <ParamField path="offset" type="number">
+      Number of records to skip.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+## admin.environments
+
+### create()
+
+```typescript
+const environment = await revstack.admin.environments.create(params);
+```
+
+<ParamField path="params" type="CreateEnvironmentParams" required>
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      Environment name (e.g. `production`, `staging`).
+    </ParamField>
+    <ParamField path="authProvider" type="string">
+      Auth provider: `supabase`, `firebase`, `auth0`, `custom`.
+    </ParamField>
+    <ParamField path="authAlgorithm" type="string">
+      JWT signing algorithm: `RS256`, `HS256`, etc.
+    </ParamField>
+    <ParamField path="authIssuer" type="string">
+      JWT issuer (`iss` claim).
+    </ParamField>
+    <ParamField path="authAudience" type="string">
+      JWT audience (`aud` claim).
+    </ParamField>
+    <ParamField path="authSecret" type="string">
+      JWT secret (for HMAC algorithms).
+    </ParamField>
+    <ParamField path="authJwksUri" type="string">
+      JWKS endpoint URI (for RSA/ECDSA algorithms).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+### rotateKeys()
+
+```typescript
+const keys = await revstack.admin.environments.rotateKeys(environmentId);
+```
+
+Rotate both the public and secret API keys for an environment. The old keys become invalid immediately. Use this after a security incident.
+
+<ParamField path="environmentId" type="string" required>
+  The environment whose keys to rotate.
+</ParamField>
+
+<ResponseField name="keys" type="object">
+  <ResponseField name="apiKeyPublic" type="string">
+    New public API key.
+  </ResponseField>
+  <ResponseField name="apiKeySecret" type="string">
+    New secret API key.
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const { apiKeyPublic, apiKeySecret } = 
+  await revstack.admin.environments.rotateKeys("env_prod");
+
+console.log("New keys generated:");
+console.log(`Public: ${apiKeyPublic}`);
+console.log(`Secret: ${apiKeySecret}`);
+```

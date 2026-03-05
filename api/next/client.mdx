@@ -1,0 +1,139 @@
+---
+title: 'Next.js Client'
+description: 'Client-side React components and hooks for Next.js App Router'
+---
+
+<Info>
+The Next.js client package (`@revstackhq/next/client`) re-exports all React components and hooks from `@revstackhq/react`.
+
+Use these in Client Components (files with `"use client"` directive).
+</Info>
+
+## Exports
+
+All exports are marked with the `"use client"` directive and safe to use in Next.js App Router Client Components.
+
+### Components
+
+- `RevstackProvider` - Context provider for the Revstack client
+
+### Hooks
+
+- `useRevstack()` - Returns the `RevstackClient` instance
+- `useEntitlement(key)` - Subscribes to entitlement changes
+
+### Client Class
+
+- `RevstackClient` - Low-level client (typically accessed via `useRevstack()`)
+
+### Types
+
+- `RevstackConfig` - Configuration object for the provider
+- `Entitlement` - Entitlement response shape
+- `CheckoutParams` - Parameters for checkout sessions
+
+## Usage
+
+<CodeGroup>
+```tsx app/providers.tsx
+"use client";
+
+import { RevstackProvider } from '@revstackhq/next/client';
+import { ReactNode } from 'react';
+
+interface ProvidersProps {
+  children: ReactNode;
+}
+
+export function Providers({ children }: ProvidersProps) {
+  const config = {
+    publicKey: process.env.NEXT_PUBLIC_REVSTACK_KEY!,
+    getToken: async () => {
+      // Fetch from your auth system
+      return sessionStorage.getItem('token');
+    },
+  };
+
+  return (
+    <RevstackProvider config={config}>
+      {children}
+    </RevstackProvider>
+  );
+}
+```
+
+```tsx app/layout.tsx
+import { Providers } from './providers';
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="en">
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+```tsx app/dashboard/page.tsx
+"use client";
+
+import { useEntitlement } from '@revstackhq/next/client';
+
+export default function DashboardPage() {
+  const analytics = useEntitlement('advanced-analytics');
+
+  return (
+    <div>
+      <h1>Dashboard</h1>
+      {analytics.hasAccess ? (
+        <AnalyticsPanel />
+      ) : (
+        <UpgradeBanner />
+      )}
+    </div>
+  );
+}
+```
+</CodeGroup>
+
+## API Reference
+
+For detailed documentation of each export, see:
+
+<CardGroup cols={2}>
+  <Card title="React Hooks" icon="hook" href="/api/react/hooks">
+    `useRevstack()` and `useEntitlement()` documentation
+  </Card>
+  <Card title="React Components" icon="layer-group" href="/api/react/components">
+    `RevstackProvider` configuration and usage
+  </Card>
+</CardGroup>
+
+## Server vs Client
+
+<Warning>
+Do not import from `@revstackhq/next/client` in Server Components or Route Handlers.
+
+For server-side entitlement checks, use [`@revstackhq/next/server`](/api/next/server) instead.
+</Warning>
+
+**Client-side** (`@revstackhq/next/client`):
+- ✅ Client Components (`"use client"`)
+- ✅ Interactive UI and forms
+- ✅ Browser-based checkout flows
+- ❌ Server Components
+- ❌ Route Handlers
+- ❌ Server Actions
+
+**Server-side** (`@revstackhq/next/server`):
+- ✅ Server Components
+- ✅ Route Handlers
+- ✅ Server Actions
+- ✅ API routes with usage metering
+- ❌ Client Components

@@ -1,0 +1,324 @@
+---
+title: definePlan
+description: Define a subscription plan with type-safe feature references
+---
+
+## Overview
+
+The `definePlan()` function defines a subscription plan with optional compile-time feature key restriction. When used with a generic type parameter, it ensures that only features defined in your configuration can be referenced.
+
+## Function Signature
+
+```typescript
+function definePlan<
+  F extends Record<string, FeatureDefInput> = Record<string, FeatureDefInput>
+>(
+  config: Omit<PlanDefInput, "features" | "prices"> & {
+    features: F extends Record<string, FeatureDefInput>
+      ? Partial<Record<keyof F, PlanFeatureValue>>
+      : Record<string, PlanFeatureValue>;
+    prices?: Array<
+      Omit<PriceDef, "overage_configuration"> & {
+        overage_configuration?: F extends Record<string, FeatureDefInput>
+          ? Partial<Record<keyof F, { overage_amount: number; overage_unit: number }>>
+          : Record<string, { overage_amount: number; overage_unit: number }>;
+      }
+    >;
+  }
+): PlanDefInput
+```
+
+### Type Parameters
+
+<ParamField path="F" type="Record<string, FeatureDefInput>" default="Record<string, FeatureDefInput>">
+  Feature dictionary type. Pass `typeof yourFeatures` for strict key validation. Omit for loose mode (backward compatible).
+</ParamField>
+
+### Parameters
+
+<ParamField path="config" type="PlanDefInput" required>
+  The plan configuration object.
+
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      Human-readable display name for the plan.
+    </ParamField>
+
+    <ParamField path="description" type="string">
+      Optional description for marketing and documentation.
+    </ParamField>
+
+    <ParamField path="is_default" type="boolean" required>
+      Whether this is the default plan. Exactly one plan must be default.
+    </ParamField>
+
+    <ParamField path="is_public" type="boolean" required>
+      Whether this plan is visible on the public pricing page.
+    </ParamField>
+
+    <ParamField path="type" type="'paid' | 'free' | 'custom'" required>
+      Commercial classification:
+      - `free`: No payment required
+      - `paid`: Requires active payment method
+      - `custom`: Enterprise/B2B contracts with custom pricing
+    </ParamField>
+
+    <ParamField path="status" type="'draft' | 'active' | 'archived'" default="active">
+      Lifecycle status:
+      - `draft`: Not yet visible or purchasable
+      - `active`: Live and available for subscription
+      - `archived`: No longer available for new subscriptions
+    </ParamField>
+
+    <ParamField path="features" type="Record<string, PlanFeatureValue>" required>
+      Feature entitlements included in this plan.
+
+      <Expandable title="PlanFeatureValue properties">
+        <ParamField path="value_limit" type="number">
+          Numeric limit (e.g., 5 seats, 10000 API calls).
+        </ParamField>
+
+        <ParamField path="value_bool" type="boolean">
+          Boolean toggle (e.g., SSO enabled/disabled).
+        </ParamField>
+
+        <ParamField path="value_text" type="string">
+          Text value for display or metadata.
+        </ParamField>
+
+        <ParamField path="is_hard_limit" type="boolean">
+          If true, usage is blocked when limit is reached. If false, overage is allowed.
+        </ParamField>
+
+        <ParamField path="reset_period" type="'daily' | 'weekly' | 'monthly' | 'yearly' | 'never'">
+          How often usage resets for metered features.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+
+    <ParamField path="prices" type="PriceDef[]">
+      Optional pricing tiers. Free/default plans typically have no prices.
+
+      <Expandable title="PriceDef properties">
+        <ParamField path="amount" type="number" required>
+          Price amount in smallest currency unit (e.g., cents).
+        </ParamField>
+
+        <ParamField path="currency" type="string" required>
+          ISO 4217 currency code (e.g., "USD", "EUR").
+        </ParamField>
+
+        <ParamField path="billing_interval" type="'monthly' | 'quarterly' | 'yearly' | 'one_time'" required>
+          How often the customer is billed.
+        </ParamField>
+
+        <ParamField path="trial_period_days" type="number">
+          Number of days for a free trial before billing starts.
+        </ParamField>
+
+        <ParamField path="is_active" type="boolean">
+          Whether this price is currently active.
+        </ParamField>
+
+        <ParamField path="overage_configuration" type="Record<string, { overage_amount: number; overage_unit: number }>">
+          Overage pricing for metered features. Maps feature slugs to their overage terms.
+        </ParamField>
+
+        <ParamField path="available_addons" type="string[]">
+          Slugs of addons that can be attached to this specific price/interval.
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Returns
+
+<ResponseField name="plan" type="PlanDefInput">
+  The plan configuration, normalized to `PlanDefInput` type.
+</ResponseField>
+
+## Usage
+
+### Strict Mode (Type-Safe Feature Keys)
+
+```typescript
+import { defineConfig, defineFeature, definePlan } from "@revstack/core";
+
+const features = {
+  seats: defineFeature({
+    name: "Team Seats",
+    type: "static",
+    unit_type: "count",
+  }),
+  storage: defineFeature({
+    name: "Storage",
+    type: "metered",
+    unit_type: "bytes",
+  }),
+};
+
+export default defineConfig({
+  features,
+  plans: {
+    pro: definePlan<typeof features>({
+      name: "Pro",
+      is_default: false,
+      is_public: true,
+      type: "paid",
+      features: {
+        seats: { value_limit: 10 },
+        storage: { value_limit: 100_000_000_000 },
+        // typo_feature: { value_bool: true }, // ❌ Compile error!
+      },
+    }),
+  },
+});
+```
+
+### Loose Mode (Backward Compatible)
+
+```typescript
+import { definePlan } from "@revstack/core";
+
+export const starter = definePlan({
+  name: "Starter",
+  is_default: true,
+  is_public: true,
+  type: "free",
+  features: {
+    seats: { value_limit: 3 },
+    anything: { value_bool: true }, // ✅ Any key accepted
+  },
+});
+```
+
+### Free Plan
+
+```typescript
+import { definePlan } from "@revstack/core";
+
+export const free = definePlan({
+  name: "Free",
+  description: "Perfect for individuals and small projects",
+  is_default: true,
+  is_public: true,
+  type: "free",
+  features: {
+    seats: { value_limit: 1 },
+    projects: { value_limit: 3 },
+    storage: { value_limit: 1_000_000_000 }, // 1 GB
+    api_calls: { 
+      value_limit: 1000, 
+      reset_period: "monthly",
+      is_hard_limit: true,
+    },
+  },
+  // No prices array for free plans
+});
+```
+
+### Paid Plan with Multiple Intervals
+
+```typescript
+import { definePlan } from "@revstack/core";
+
+export const pro = definePlan({
+  name: "Pro",
+  description: "For growing teams",
+  is_default: false,
+  is_public: true,
+  type: "paid",
+  features: {
+    seats: { value_limit: 10 },
+    projects: { value_limit: 50 },
+    storage: { value_limit: 100_000_000_000 }, // 100 GB
+    api_calls: { 
+      value_limit: 50000, 
+      reset_period: "monthly",
+      is_hard_limit: false, // Allow overage
+    },
+  },
+  prices: [
+    {
+      amount: 2900,
+      currency: "USD",
+      billing_interval: "monthly",
+      trial_period_days: 14,
+      available_addons: ["extra_seats"],
+    },
+    {
+      amount: 29000,
+      currency: "USD",
+      billing_interval: "yearly",
+      trial_period_days: 14,
+      available_addons: ["extra_seats"],
+    },
+  ],
+});
+```
+
+### Plan with Overage Pricing
+
+```typescript
+import { definePlan } from "@revstack/core";
+
+export const business = definePlan({
+  name: "Business",
+  is_default: false,
+  is_public: true,
+  type: "paid",
+  features: {
+    api_calls: { 
+      value_limit: 100000, 
+      reset_period: "monthly",
+      is_hard_limit: false, // Allow overage
+    },
+  },
+  prices: [
+    {
+      amount: 9900,
+      currency: "USD",
+      billing_interval: "monthly",
+      overage_configuration: {
+        api_calls: {
+          overage_amount: 10, // $0.10 per unit
+          overage_unit: 1000, // Per 1000 API calls
+        },
+      },
+    },
+  ],
+});
+```
+
+### Enterprise/Custom Plan
+
+```typescript
+import { definePlan } from "@revstack/core";
+
+export const enterprise = definePlan({
+  name: "Enterprise",
+  description: "Custom pricing and unlimited resources",
+  is_default: false,
+  is_public: true,
+  type: "custom", // No prices array, redirects to "Contact Sales"
+  features: {
+    seats: { value_bool: true }, // Unlimited
+    projects: { value_bool: true },
+    storage: { value_bool: true },
+    sso: { value_bool: true },
+  },
+});
+```
+
+## Source
+
+**Location**: [`packages/core/src/define.ts:41-60`](~/workspace/source/packages/core/src/define.ts)
+
+## Related
+
+- [defineConfig](/api/core/define-config) - Define the root configuration
+- [defineFeature](/api/core/define-feature) - Define features referenced by plans
+- [defineAddon](/api/core/define-addon) - Define add-ons for plans
+- [EntitlementEngine](/api/core/engine) - Evaluate plan entitlements at runtime
+- [validateConfig](/api/core/validator) - Validate plan configuration

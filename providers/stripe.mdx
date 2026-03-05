@@ -1,0 +1,369 @@
+---
+title: 'Stripe Provider'
+description: 'Setup and configuration guide for the Stripe payment provider'
+icon: 'stripe'
+---
+
+## Overview
+
+The Stripe provider enables payment processing through [Stripe](https://stripe.com), the global standard for payment infrastructure. It supports cards, wallets (Apple Pay, Google Pay), bank transfers, and comprehensive subscription management.
+
+## Features
+
+The Stripe provider includes full support for:
+
+<CardGroup cols={2}>
+  <Card title="Payments" icon="credit-card">
+    One-time payments with auth/capture, refunds, and dispute handling
+  </Card>
+  <Card title="Subscriptions" icon="repeat">
+    Native billing engine with pause, resume, and proration support
+  </Card>
+  <Card title="Checkout" icon="cart-shopping">
+    Redirect-based hosted checkout or embedded Elements SDK
+  </Card>
+  <Card title="Customer Portal" icon="user">
+    Self-service billing portal for subscription management
+  </Card>
+</CardGroup>
+
+## Installation
+
+Install the Stripe provider package:
+
+```bash
+npm install @revstackhq/provider-stripe
+```
+
+## Configuration
+
+### Required Credentials
+
+The Stripe provider requires a Secret API Key from your Stripe dashboard:
+
+<Steps>
+  <Step title="Get your API key">
+    Navigate to [Stripe Dashboard → Developers → API Keys](https://dashboard.stripe.com/apikeys)
+  </Step>
+  <Step title="Copy the Secret Key">
+    Use the **Secret key** (starts with `sk_test_` for test mode or `sk_live_` for production)
+  </Step>
+  <Step title="Configure in Revstack">
+    Add the key to your provider configuration
+  </Step>
+</Steps>
+
+### Setup Configuration
+
+```typescript
+import { StripeProvider } from '@revstackhq/provider-stripe';
+
+const provider = new StripeProvider();
+
+// Install the provider with your credentials
+const result = await provider.onInstall(
+  {
+    config: {},
+    environment: 'test'
+  },
+  {
+    config: {
+      apiKey: 'sk_test_...'  // Your Stripe Secret Key
+    },
+    webhookUrl: 'https://your-app.com/webhooks/stripe'  // Optional
+  }
+);
+
+if (result.status === 'success') {
+  console.log('Provider installed:', result.data);
+  // Store result.data.data in your database (includes webhookSecret)
+}
+```
+
+<Info>
+  The setup process automatically creates a webhook endpoint in Stripe if you provide a `webhookUrl`. The webhook secret is returned in the install result and should be stored securely.
+</Info>
+
+<Warning>
+  The API key must match the pattern `^sk_(test|live)_[a-zA-Z0-9]+$`. Use `sk_test_` keys for development and `sk_live_` keys for production.
+</Warning>
+
+## Manifest Configuration
+
+The Stripe provider manifest defines its capabilities and requirements:
+
+```typescript
+{
+  slug: 'stripe',
+  name: 'Stripe',
+  version: '1.0.0',
+  status: 'beta',
+  categories: ['card', 'wallet', 'bank_transfer'],
+  
+  // Global support
+  localization: {
+    customerCountries: ['*'],  // Accepts customers globally
+    merchantCountries: ['US', 'CA', 'GB', 'AU', ...],
+    processingCurrencies: ['USD', 'EUR', 'GBP', ...],  // 40+ currencies
+    settlementCurrencies: ['USD', 'EUR', 'GBP', ...]
+  },
+  
+  // Compliance
+  compliance: {
+    actsAsMoR: false,           // Not a Merchant of Record
+    calculatesTaxes: true,       // Stripe Tax available
+    pciLevel: 'Level 1'
+  },
+  
+  // Capabilities
+  capabilities: {
+    checkout: {
+      supported: true,
+      strategy: 'redirect'       // Stripe Checkout
+    },
+    payments: {
+      supported: true,
+      features: {
+        capture: true,
+        disputes: true,
+        partialRefunds: true,
+        refunds: true
+      }
+    },
+    subscriptions: {
+      supported: true,
+      mode: 'native',            // Stripe handles billing
+      features: {
+        cancellation: true,
+        pause: true,
+        resume: true,
+        proration: true
+      }
+    },
+    webhooks: {
+      supported: true,
+      verification: 'signature'  // HMAC SHA256
+    }
+  },
+  
+  // System traits
+  systemTraits: {
+    hasNativeIdempotency: true,
+    sandboxStrategy: 'separate_credentials',
+    rateLimits: {
+      requestsPerSecond: 100
+    }
+  }
+}
+```
+
+<Info>
+  See [providers/official/stripe/src/manifest.ts:3](~/workspace/source/packages/providers/official/stripe/src/manifest.ts:3) for the complete manifest.
+</Info>
+
+## Usage Examples
+
+### Creating a Payment
+
+```typescript
+const payment = await provider.createPayment(
+  {
+    config: installedConfig,  // From install result
+    environment: 'test'
+  },
+  {
+    amount: 2999,  // $29.99 in cents
+    currency: 'USD',
+    customer: {
+      id: 'cus_123',  // Stripe customer ID
+      email: 'customer@example.com'
+    },
+    paymentMethod: 'pm_card_visa',
+    description: 'Monthly subscription',
+    metadata: {
+      orderId: 'order_123'
+    }
+  }
+);
+
+if (payment.status === 'success') {
+  console.log('Payment ID:', payment.data);
+}
+```
+
+### Creating a Subscription
+
+```typescript
+const subscription = await provider.createSubscription(
+  ctx,
+  {
+    customer: {
+      id: 'cus_123'
+    },
+    items: [
+      {
+        price: 'price_1234',  // Stripe Price ID
+        quantity: 1
+      }
+    ],
+    trial: {
+      enabled: true,
+      days: 14
+    },
+    metadata: {
+      plan: 'pro'
+    }
+  }
+);
+```
+
+### Creating a Checkout Session
+
+```typescript
+const checkout = await provider.createCheckoutSession(
+  ctx,
+  {
+    mode: 'subscription',
+    customer: {
+      email: 'customer@example.com'
+    },
+    lineItems: [
+      {
+        price: 'price_1234',
+        quantity: 1
+      }
+    ],
+    successUrl: 'https://your-app.com/success',
+    cancelUrl: 'https://your-app.com/cancel'
+  }
+);
+
+if (checkout.status === 'success') {
+  // Redirect user to checkout.data.url
+  console.log('Checkout URL:', checkout.data.url);
+}
+```
+
+### Handling Webhooks
+
+The Stripe provider automatically verifies webhook signatures and parses events:
+
+```typescript
+// In your webhook endpoint
+app.post('/webhooks/stripe', async (req, res) => {
+  const signature = req.headers['stripe-signature'];
+  const payload = req.body;
+  
+  // Verify signature
+  const isValid = await provider.verifyWebhookSignature(
+    ctx,
+    payload,
+    { 'stripe-signature': signature },
+    webhookSecret  // From install result
+  );
+  
+  if (!isValid.data) {
+    return res.status(400).send('Invalid signature');
+  }
+  
+  // Parse event
+  const event = await provider.parseWebhookEvent(ctx, JSON.parse(payload));
+  
+  if (event.status === 'success' && event.data) {
+    console.log('Event type:', event.data.type);
+    console.log('Event data:', event.data.data);
+    
+    // Handle the event
+    switch (event.data.type) {
+      case 'payment.succeeded':
+        // Handle successful payment
+        break;
+      case 'subscription.created':
+        // Handle new subscription
+        break;
+    }
+  }
+  
+  // Return success response
+  const response = await provider.getWebhookResponse(ctx);
+  res.status(response.data.statusCode).json(response.data.body);
+});
+```
+
+<Info>
+  See [providers/official/stripe/src/provider.ts:45](~/workspace/source/packages/providers/official/stripe/src/provider.ts:45) for the complete implementation.
+</Info>
+
+## Supported Payment Methods
+
+The Stripe provider supports:
+
+- **card** - Credit and debit cards (Visa, Mastercard, Amex, etc.)
+- **apple_pay** - Apple Pay wallet
+- **google_pay** - Google Pay wallet
+- **amazon_pay** - Amazon Pay wallet
+
+Additional payment methods can be enabled in your Stripe dashboard.
+
+## Error Handling
+
+All operations return standardized error codes:
+
+```typescript
+import { RevstackErrorCode } from '@revstackhq/providers-core';
+
+const result = await provider.createPayment(ctx, input);
+
+if (result.status === 'failed') {
+  switch (result.error.code) {
+    case RevstackErrorCode.InvalidCredentials:
+      console.error('Invalid API key');
+      break;
+    case RevstackErrorCode.InsufficientFunds:
+      console.error('Card declined');
+      break;
+    case RevstackErrorCode.NotImplemented:
+      console.error('Operation not supported');
+      break;
+    default:
+      console.error('Error:', result.error.message);
+  }
+}
+```
+
+## Testing
+
+Use Stripe's test mode for development:
+
+1. Use a `sk_test_` API key
+2. Set `environment: 'test'` in the provider context
+3. Use [Stripe test cards](https://stripe.com/docs/testing) for payments
+
+**Common test cards:**
+
+- Success: `4242 4242 4242 4242`
+- Declined: `4000 0000 0000 0002`
+- 3D Secure: `4000 0025 0000 3155`
+
+## Resources
+
+<CardGroup cols={2}>
+  <Card title="Stripe Dashboard" icon="stripe" href="https://dashboard.stripe.com">
+    Manage your Stripe account and view transactions
+  </Card>
+  <Card title="Stripe Documentation" icon="book" href="https://stripe.com/docs">
+    Official Stripe API documentation
+  </Card>
+  <Card title="Test Cards" icon="credit-card" href="https://stripe.com/docs/testing">
+    Test card numbers for development
+  </Card>
+  <Card title="Provider Source" icon="code" href="https://github.com/revstack-dev/revstack-os">
+    View the Stripe provider source code
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Custom Providers" icon="code" href="/providers/custom">
+  Learn how to build your own custom provider
+</Card>

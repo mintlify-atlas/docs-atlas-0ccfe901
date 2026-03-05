@@ -1,0 +1,505 @@
+---
+title: 'Next.js SDK'
+description: 'Server and client components for Next.js App Router'
+icon: 'grid'
+---
+
+The Next.js SDK provides specialized utilities for both server and client components in Next.js 14+ App Router applications.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @revstackhq/next
+```
+
+```bash yarn
+yarn add @revstackhq/next
+```
+
+```bash pnpm
+pnpm add @revstackhq/next
+```
+</CodeGroup>
+
+## Package Structure
+
+The Next.js SDK has two separate entry points:
+
+- `@revstackhq/next/client` — Client components and hooks ("use client")
+- `@revstackhq/next/server` — Server-side functions for RSC and Route Handlers
+
+## Client Components
+
+### Setup
+
+Create a client wrapper component:
+
+```tsx title="components/providers.tsx"
+"use client";
+
+import { RevstackProvider } from "@revstackhq/next/client";
+import { useAuth } from "@clerk/nextjs"; // or your auth provider
+
+export function Providers({ children }: { children: React.ReactNode }) {
+  const { getToken } = useAuth();
+
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.NEXT_PUBLIC_REVSTACK_PUBLIC_KEY!,
+        getToken: async () => {
+          const token = await getToken();
+          return token ?? null;
+        },
+      }}
+    >
+      {children}
+    </RevstackProvider>
+  );
+}
+```
+
+Then wrap your root layout:
+
+```tsx title="app/layout.tsx"
+import { Providers } from "@/components/providers";
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+### Client Hooks
+
+The client SDK re-exports all hooks from `@revstackhq/react`:
+
+```tsx title="app/dashboard/page.tsx"
+"use client";
+
+import { useEntitlement, useRevstack } from "@revstackhq/next/client";
+
+export default function Dashboard() {
+  const analytics = useEntitlement("analytics");
+  const revstack = useRevstack();
+
+  if (!analytics.hasAccess) {
+    return <UpgradeBanner feature="Analytics" />;
+  }
+
+  return <AnalyticsDashboard />;
+}
+```
+
+See the [React SDK documentation](/sdks/react) for detailed hook usage.
+
+## Server Components
+
+### Configuration
+
+Create a shared server config:
+
+```typescript title="lib/revstack-server.ts"
+import type { RevstackServerConfig } from "@revstackhq/next/server";
+
+export const serverConfig: RevstackServerConfig = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+  apiUrl: process.env.REVSTACK_API_URL, // optional
+  redirectTo: "/pricing", // optional redirect for requireEntitlement
+};
+```
+
+### Server-Side Entitlement Checks
+
+Use `getEntitlement` in React Server Components:
+
+```tsx title="app/premium/page.tsx"
+import { getEntitlement } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export default async function PremiumPage() {
+  const feature = await getEntitlement("premium-feature", serverConfig);
+
+  if (!feature.hasAccess) {
+    return <PaywallPage />;
+  }
+
+  return <PremiumContent />;
+}
+```
+
+### Server-Side Entitlement Gates
+
+Use `requireEntitlement` to enforce access control:
+
+```tsx title="app/admin/page.tsx"
+import { requireEntitlement } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export default async function AdminPage() {
+  // This will redirect to /pricing if user lacks access
+  await requireEntitlement("admin-access", serverConfig);
+
+  return <AdminDashboard />;
+}
+```
+
+<Info>
+`requireEntitlement` either redirects (if `redirectTo` is configured) or throws an error.
+</Info>
+
+### How Authentication Works
+
+The server functions automatically extract user identity from request headers:
+
+- `Authorization` header (standard JWT bearer token)
+- `X-Revstack-Auth` header (custom auth token)
+- `X-Revstack-Guest-Id` header (anonymous users)
+
+Your auth middleware should forward these headers:
+
+```typescript title="middleware.ts"
+import { auth } from "@clerk/nextjs";
+import { NextResponse } from "next/server";
+
+export default auth((req) => {
+  const token = req.auth?.sessionClaims?.token;
+
+  const response = NextResponse.next();
+
+  if (token) {
+    // Forward auth token to RSC
+    response.headers.set("X-Revstack-Auth", token);
+  }
+
+  return response;
+});
+```
+
+## Server Actions
+
+### Usage Tracking
+
+Report usage from Server Actions:
+
+```typescript title="app/actions.ts"
+"use server";
+
+import { trackUsage } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export async function generateReport(prompt: string) {
+  // Track usage
+  await trackUsage("ai-credits", { amount: 1 }, serverConfig);
+
+  // Call AI service
+  const result = await openai.chat.completions.create({
+    model: "gpt-4",
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  return result.choices[0]?.message.content;
+}
+```
+
+### AI Usage Tracking
+
+For AI-specific billing with token counts:
+
+```typescript
+await trackUsage(
+  "ai-tokens",
+  {
+    ai: {
+      modelId: "gpt-4",
+      promptTokens: 150,
+      completionTokens: 300,
+      totalTokens: 450,
+    },
+  },
+  serverConfig
+);
+```
+
+## Route Handlers
+
+### Usage Metering Wrapper
+
+The `withMetering` HOF deducts credits before running your API handler:
+
+```typescript title="app/api/generate/route.ts"
+import { withMetering } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export const POST = withMetering(
+  "ai-credits",       // feature key
+  1,                  // amount to deduct
+  serverConfig,       // config
+  async (req) => {    // your handler
+    const body = await req.json();
+
+    const result = await generateWithAI(body.prompt);
+
+    return Response.json({ result });
+  }
+);
+```
+
+**Behavior:**
+
+- If user has sufficient credits, the handler runs normally
+- If user lacks credits, returns `402 Payment Required` without invoking the handler
+- Automatically tracks usage before the handler executes
+
+### Manual Usage Tracking in Route Handlers
+
+For more control, use `trackUsage` directly:
+
+```typescript title="app/api/chat/route.ts"
+import { trackUsage } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export async function POST(req: Request) {
+  try {
+    // Track usage
+    await trackUsage("ai-tokens", { amount: 100 }, serverConfig);
+
+    // Generate response
+    const completion = await openai.chat.completions.create({ ... });
+
+    return Response.json({ completion });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("quota")) {
+      return Response.json(
+        { error: "Insufficient credits" },
+        { status: 402 }
+      );
+    }
+    throw error;
+  }
+}
+```
+
+## Middleware Integration
+
+Protect routes with middleware:
+
+```typescript title="middleware.ts"
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export async function middleware(req: NextRequest) {
+  // Forward auth headers for server components
+  const token = req.cookies.get("auth-token")?.value;
+
+  const response = NextResponse.next();
+
+  if (token) {
+    response.headers.set("X-Revstack-Auth", token);
+  }
+
+  return response;
+}
+
+export const config = {
+  matcher: ['/dashboard/:path*', '/api/:path*'],
+};
+```
+
+## Complete Example
+
+Here's a full Next.js app with both client and server usage:
+
+<CodeGroup>
+```tsx app/layout.tsx
+import { Providers } from "@/components/providers";
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
+    </html>
+  );
+}
+```
+
+```tsx components/providers.tsx
+"use client";
+
+import { RevstackProvider } from "@revstackhq/next/client";
+import { useAuth } from "@clerk/nextjs";
+
+export function Providers({ children }) {
+  const { getToken } = useAuth();
+
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.NEXT_PUBLIC_REVSTACK_PUBLIC_KEY!,
+        getToken: async () => {
+          const token = await getToken();
+          return token ?? null;
+        },
+      }}
+    >
+      {children}
+    </RevstackProvider>
+  );
+}
+```
+
+```tsx app/dashboard/page.tsx
+"use client";
+
+import { useEntitlement } from "@revstackhq/next/client";
+
+export default function Dashboard() {
+  const analytics = useEntitlement("analytics");
+
+  if (!analytics.hasAccess) {
+    return <div>Upgrade to view analytics</div>;
+  }
+
+  return <AnalyticsCharts />;
+}
+```
+
+```tsx app/api/generate/route.ts
+import { withMetering } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export const POST = withMetering(
+  "ai-credits",
+  1,
+  serverConfig,
+  async (req) => {
+    const { prompt } = await req.json();
+    const result = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [{ role: "user", content: prompt }],
+    });
+    return Response.json(result);
+  }
+);
+```
+
+```tsx app/premium/page.tsx
+import { requireEntitlement } from "@revstackhq/next/server";
+import { serverConfig } from "@/lib/revstack-server";
+
+export default async function PremiumPage() {
+  await requireEntitlement("premium-access", serverConfig);
+
+  return <PremiumContent />;
+}
+```
+
+```typescript lib/revstack-server.ts
+import type { RevstackServerConfig } from "@revstackhq/next/server";
+
+export const serverConfig: RevstackServerConfig = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+  redirectTo: "/pricing",
+};
+```
+</CodeGroup>
+
+## TypeScript Support
+
+Full type definitions for both client and server:
+
+```typescript
+// Client types
+import type {
+  RevstackConfig,
+  Entitlement,
+  CheckoutParams,
+} from "@revstackhq/next/client";
+
+// Server types
+import type {
+  RevstackServerConfig,
+  Entitlement,
+  UsageData,
+} from "@revstackhq/next/server";
+```
+
+## API Reference
+
+### Server Functions
+
+#### getEntitlement
+
+```typescript
+async function getEntitlement(
+  key: string,
+  config: RevstackServerConfig
+): Promise<Entitlement>
+```
+
+Check entitlement for the current user (extracted from headers).
+
+#### requireEntitlement
+
+```typescript
+async function requireEntitlement(
+  key: string,
+  config: RevstackServerConfig
+): Promise<Entitlement>
+```
+
+Enforce entitlement access. Redirects or throws if access denied.
+
+#### trackUsage
+
+```typescript
+async function trackUsage(
+  key: string,
+  usage: UsageData,
+  config: RevstackServerConfig
+): Promise<void>
+```
+
+Report usage for the current user.
+
+#### withMetering
+
+```typescript
+function withMetering(
+  key: string,
+  amount: number,
+  config: RevstackServerConfig,
+  handler: RouteHandler
+): RouteHandler
+```
+
+Wrap a Route Handler with usage deduction.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="React SDK" icon="react" href="/sdks/react">
+    Learn more about client hooks
+  </Card>
+  <Card title="Node.js SDK" icon="node-js" href="/sdks/node">
+    Full server-side API reference
+  </Card>
+  <Card title="Authentication" icon="lock" href="/auth/overview">
+    Integrate with your auth provider
+  </Card>
+  <Card title="Usage Metering" icon="bolt" href="/concepts/usage-metering">
+    Track usage in Next.js Server Actions
+  </Card>
+</CardGroup>

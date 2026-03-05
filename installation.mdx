@@ -1,0 +1,726 @@
+---
+title: Installation
+description: Detailed setup instructions for all Revstack SDKs and runtime environments
+---
+
+This guide covers installation and configuration for all Revstack SDKs across different environments. Choose the section that matches your stack.
+
+## Node.js / TypeScript (Server-Side)
+
+The `@revstackhq/node` SDK is for server-side applications, including Express, Fastify, Hono, and serverless functions.
+
+### Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @revstackhq/node
+```
+
+```bash pnpm
+pnpm add @revstackhq/node
+```
+
+```bash yarn
+yarn add @revstackhq/node
+```
+
+</CodeGroup>
+
+### Basic Setup
+
+Initialize the client with your secret key:
+
+```typescript server.ts
+import { Revstack } from "@revstackhq/node";
+
+const revstack = new Revstack({
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+});
+
+// Check entitlements
+const { allowed } = await revstack.entitlements.check("cus_abc", "api-calls");
+```
+
+### Configuration Options
+
+```typescript
+new Revstack({
+  secretKey: "sk_live_...", // Required — your Revstack Secret Key
+  baseUrl: "https://...", // Optional — API base URL (default: https://app.revstack.dev/api/v1)
+  timeout: 10000, // Optional — request timeout in ms (default: 10000)
+});
+```
+
+### Environment Variables
+
+Create a `.env` file in your project root:
+
+```bash .env
+REVSTACK_SECRET_KEY=sk_live_your_secret_key_here
+```
+
+<Warning>
+  **Never commit your secret key to version control.** Use environment variables, secrets managers (AWS Secrets Manager, Vault), or CI/CD secrets.
+</Warning>
+
+### TypeScript Configuration
+
+Revstack is written in TypeScript and exports all types. Your `tsconfig.json` should include:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "strict": true
+  }
+}
+```
+
+### Express Example
+
+```typescript app.ts
+import express from "express";
+import { Revstack } from "@revstackhq/node";
+
+const app = express();
+const revstack = new Revstack({
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+});
+
+app.get("/api/premium-feature", async (req, res) => {
+  const customerId = req.user.id;
+
+  const { allowed, reason } = await revstack.entitlements.check(
+    customerId,
+    "premium-features"
+  );
+
+  if (!allowed) {
+    return res.status(403).json({ error: reason });
+  }
+
+  res.json({ data: "Premium content" });
+});
+
+app.listen(3000);
+```
+
+---
+
+## React
+
+The `@revstackhq/react` package provides hooks and context for React applications (16.8+).
+
+### Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @revstackhq/react @revstackhq/browser
+```
+
+```bash pnpm
+pnpm add @revstackhq/react @revstackhq/browser
+```
+
+```bash yarn
+yarn add @revstackhq/react @revstackhq/browser
+```
+
+</CodeGroup>
+
+### Setup Provider
+
+Wrap your app in `<RevstackProvider>`:
+
+```tsx App.tsx
+import { RevstackProvider } from "@revstackhq/react";
+
+export function App({ children }) {
+  return (
+    <RevstackProvider
+      config={{
+        publicKey: process.env.REACT_APP_REVSTACK_PUBLIC_KEY,
+        getToken: async () => localStorage.getItem("auth_token"),
+      }}
+    >
+      {children}
+    </RevstackProvider>
+  );
+}
+```
+
+### Use Hooks
+
+Check entitlements reactively with `useEntitlement()`:
+
+```tsx PremiumFeature.tsx
+import { useEntitlement, useRevstack } from "@revstackhq/react";
+
+export function PremiumFeature() {
+  const { hasAccess, value } = useEntitlement("pro-tier");
+  const client = useRevstack();
+
+  if (!client.isReady) {
+    return <Spinner />;
+  }
+
+  if (!hasAccess) {
+    return (
+      <button onClick={() => client.startCheckout({ planId: "price_123" })}>
+        Upgrade to Pro
+      </button>
+    );
+  }
+
+  return <div>Welcome to Premium!</div>;
+}
+```
+
+### Environment Variables
+
+Create a `.env` file:
+
+```bash .env
+REACT_APP_REVSTACK_PUBLIC_KEY=rs_pub_your_public_key_here
+```
+
+<Note>
+  React apps use **public keys** (`rs_pub_...`), not secret keys. Public keys are safe to expose in client-side code.
+</Note>
+
+### Authentication Integration
+
+If you're using an auth provider (Auth0, Clerk, Supabase, etc.), pass the JWT via `getToken`:
+
+```tsx
+<RevstackProvider
+  config={{
+    publicKey: process.env.REACT_APP_REVSTACK_PUBLIC_KEY,
+    getToken: async () => {
+      // Example with Auth0
+      const token = await auth0.getAccessTokenSilently();
+      return token;
+    },
+  }}
+>
+  {children}
+</RevstackProvider>
+```
+
+---
+
+## Next.js
+
+The `@revstackhq/next` package provides both client-side and server-side utilities for Next.js 14+.
+
+### Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @revstackhq/next
+```
+
+```bash pnpm
+pnpm add @revstackhq/next
+```
+
+```bash yarn
+yarn add @revstackhq/next
+```
+
+</CodeGroup>
+
+### Client-Side Setup
+
+Use the client components for browser-side entitlement checks:
+
+```tsx app/layout.tsx
+"use client";
+
+import { RevstackProvider } from "@revstackhq/next/client";
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        <RevstackProvider
+          config={{
+            publicKey: process.env.NEXT_PUBLIC_REVSTACK_KEY,
+            getToken: async () => localStorage.getItem("token"),
+          }}
+        >
+          {children}
+        </RevstackProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+```tsx app/dashboard/page.tsx
+"use client";
+
+import { useEntitlement } from "@revstackhq/next/client";
+
+export default function Dashboard() {
+  const { hasAccess } = useEntitlement("dashboard-access");
+
+  if (!hasAccess) {
+    return <div>Please upgrade to access the dashboard</div>;
+  }
+
+  return <div>Dashboard content</div>;
+}
+```
+
+### Server-Side Setup
+
+Use server utilities in Server Components, Route Handlers, and Server Actions:
+
+```tsx app/api/data/route.ts
+import { getEntitlement, trackUsage } from "@revstackhq/next/server";
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export async function GET(req: Request) {
+  // Check entitlement (reads identity from request headers)
+  const entitlement = await getEntitlement("api-access", config);
+
+  if (!entitlement.hasAccess) {
+    return Response.json({ error: "Upgrade required" }, { status: 403 });
+  }
+
+  // Perform operation
+  const data = await fetchData();
+
+  // Track usage
+  await trackUsage("api-calls", { amount: 1 }, config);
+
+  return Response.json({ data });
+}
+```
+
+### Server Component Example
+
+Gate entire pages in Server Components:
+
+```tsx app/premium/page.tsx
+import { requireEntitlement } from "@revstackhq/next/server";
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+  redirectTo: "/pricing", // Redirect if access denied
+};
+
+export default async function PremiumPage() {
+  // This throws or redirects if user lacks access
+  await requireEntitlement("premium-access", config);
+
+  return <div>Premium content</div>;
+}
+```
+
+### Middleware Example
+
+Protect routes at the edge with Next.js middleware:
+
+```typescript middleware.ts
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+
+export async function middleware(request: NextRequest) {
+  const token = request.cookies.get("auth_token")?.value;
+
+  if (!token) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // Forward token to your API routes
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-revstack-auth", token);
+
+  return NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
+}
+
+export const config = {
+  matcher: ["/dashboard/:path*", "/api/:path*"],
+};
+```
+
+### Environment Variables
+
+```bash .env.local
+# Server-side (secret key)
+REVSTACK_SECRET_KEY=sk_live_...
+
+# Client-side (public key)
+NEXT_PUBLIC_REVSTACK_KEY=rs_pub_...
+```
+
+<Note>
+  Variables prefixed with `NEXT_PUBLIC_` are exposed to the browser. Use `REVSTACK_SECRET_KEY` without the prefix for server-only code.
+</Note>
+
+---
+
+## Browser (Vanilla JavaScript)
+
+The `@revstackhq/browser` package is a framework-agnostic client for vanilla JavaScript applications.
+
+### Installation
+
+<CodeGroup>
+
+```bash npm
+npm install @revstackhq/browser
+```
+
+```bash pnpm
+pnpm add @revstackhq/browser
+```
+
+```bash yarn
+yarn add @revstackhq/browser
+```
+
+```html CDN
+<script src="https://unpkg.com/@revstackhq/browser/dist/index.global.js"></script>
+```
+
+</CodeGroup>
+
+### Basic Setup
+
+```typescript
+import { RevstackClient } from "@revstackhq/browser";
+
+const client = new RevstackClient({
+  publicKey: "rs_pub_your_public_key",
+  async getToken() {
+    return localStorage.getItem("auth_token");
+  },
+});
+
+// Initialize to fetch entitlements
+await client.init();
+
+// Check access synchronously from cache
+if (client.hasAccess("premium-features")) {
+  console.log("User has premium access");
+}
+```
+
+### CDN Usage
+
+```html index.html
+<!DOCTYPE html>
+<html>
+  <head>
+    <script src="https://unpkg.com/@revstackhq/browser/dist/index.global.js"></script>
+  </head>
+  <body>
+    <div id="premium-content" style="display: none;">
+      Premium content here
+    </div>
+
+    <script>
+      const client = new Revstack.RevstackClient({
+        publicKey: "rs_pub_your_public_key",
+        getToken: async () => localStorage.getItem("auth_token"),
+      });
+
+      client.init().then(() => {
+        if (client.hasAccess("premium-features")) {
+          document.getElementById("premium-content").style.display = "block";
+        }
+      });
+    </script>
+  </body>
+</html>
+```
+
+### Reactive Updates
+
+Subscribe to entitlement changes:
+
+```typescript
+const unsubscribe = client.subscribe(() => {
+  console.log("Entitlements updated");
+  updateUI();
+});
+
+function updateUI() {
+  const hasPremium = client.hasAccess("premium-tier");
+  document.getElementById("premium-badge").style.display = hasPremium
+    ? "block"
+    : "none";
+}
+
+// Unsubscribe when done
+unsubscribe();
+```
+
+### Checkout Integration
+
+Launch Stripe Checkout directly from the browser:
+
+```typescript
+document.getElementById("upgrade-btn").addEventListener("click", async () => {
+  await client.startCheckout({
+    planId: "price_abc123",
+    successUrl: "https://yourapp.com/success",
+    cancelUrl: "https://yourapp.com/pricing",
+  });
+});
+```
+
+---
+
+## TypeScript Configuration
+
+All Revstack SDKs are written in TypeScript. For the best developer experience:
+
+### Recommended `tsconfig.json`
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM"],
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  }
+}
+```
+
+### Type Imports
+
+All types are exported from the main package:
+
+```typescript
+import type {
+  Entitlement,
+  EntitlementCheckResult,
+  Customer,
+  Subscription,
+  Plan,
+} from "@revstackhq/node";
+
+const checkResult: EntitlementCheckResult = await revstack.entitlements.check(
+  "cus_abc",
+  "feature"
+);
+```
+
+---
+
+## Authentication Setup
+
+Revstack integrates with popular auth providers via the `@revstackhq/auth` package.
+
+### Installation
+
+```bash
+npm install @revstackhq/auth
+```
+
+### Supported Providers
+
+- **Auth0**
+- **Clerk**
+- **Supabase**
+- **AWS Cognito**
+- **Firebase Auth**
+- **Custom JWT**
+
+### Example: Auth0
+
+```typescript
+import { Revstack } from "@revstackhq/node";
+import { verifyAuth0Token } from "@revstackhq/auth";
+
+const revstack = new Revstack({
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+});
+
+app.get("/api/protected", async (req, res) => {
+  const token = req.headers.authorization?.replace("Bearer ", "");
+
+  // Verify the Auth0 JWT
+  const { sub: userId } = await verifyAuth0Token(token, {
+    domain: "yourapp.auth0.com",
+    audience: "https://api.yourapp.com",
+  });
+
+  // Check entitlements using the verified user ID
+  const { allowed } = await revstack.entitlements.check(userId, "api-access");
+
+  if (!allowed) {
+    return res.status(403).json({ error: "Upgrade required" });
+  }
+
+  res.json({ message: "Access granted" });
+});
+```
+
+### Example: Clerk
+
+```typescript
+import { verifyClerkToken } from "@revstackhq/auth";
+
+const { userId } = await verifyClerkToken(token, {
+  secretKey: process.env.CLERK_SECRET_KEY,
+});
+
+const { allowed } = await revstack.entitlements.check(userId, "feature");
+```
+
+---
+
+## Testing and Development
+
+### Local Development
+
+Use test mode keys during development:
+
+```bash .env.development
+REVSTACK_SECRET_KEY=sk_test_...
+REVSTACK_PUBLIC_KEY=rs_pub_test_...
+```
+
+### Mock Client for Testing
+
+Create a mock client for unit tests:
+
+```typescript tests/utils.ts
+export function createMockRevstack() {
+  return {
+    entitlements: {
+      check: jest.fn().mockResolvedValue({
+        allowed: true,
+        limit: 1000,
+        usage: 0,
+        reason: "allowed",
+      }),
+    },
+    usage: {
+      report: jest.fn().mockResolvedValue(undefined),
+    },
+  };
+}
+```
+
+```typescript tests/api.test.ts
+import { createMockRevstack } from "./utils";
+
+describe("API Route", () => {
+  it("checks entitlements", async () => {
+    const revstack = createMockRevstack();
+
+    await handleRequest(revstack, "cus_123");
+
+    expect(revstack.entitlements.check).toHaveBeenCalledWith(
+      "cus_123",
+      "api-calls"
+    );
+  });
+});
+```
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="Error: Secret Key is required">
+    **Cause:** The `secretKey` option is missing or undefined.
+
+    **Solution:** Ensure your environment variable is loaded:
+
+    ```typescript
+    import * as dotenv from "dotenv";
+    dotenv.config();
+
+    const revstack = new Revstack({
+      secretKey: process.env.REVSTACK_SECRET_KEY!,
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="401 Unauthorized">
+    **Cause:** Invalid or expired secret key.
+
+    **Solution:** Verify your key in the [Revstack Dashboard](https://app.revstack.dev/settings/keys). Ensure you're using the correct environment (test vs. live).
+  </Accordion>
+
+  <Accordion title="CORS errors in browser">
+    **Cause:** Browser SDKs use public keys and hit the Revstack API directly.
+
+    **Solution:** Ensure you're using a public key (`rs_pub_...`), not a secret key. CORS is pre-configured for `*.revstack.dev`.
+  </Accordion>
+
+  <Accordion title="Type errors with TypeScript">
+    **Cause:** Outdated TypeScript version or misconfigured `tsconfig.json`.
+
+    **Solution:** Upgrade TypeScript to 5.0+ and ensure `moduleResolution: "node"` is set.
+
+    ```bash
+    npm install typescript@latest --save-dev
+    ```
+  </Accordion>
+
+  <Accordion title="React hydration mismatch">
+    **Cause:** SSR returning different content than the client.
+
+    **Solution:** Use `client.isReady` to prevent rendering until entitlements are loaded:
+
+    ```tsx
+    const client = useRevstack();
+
+    if (!client.isReady) {
+      return <Skeleton />;
+    }
+
+    // Safe to render based on entitlements
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Build your first app with Revstack
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/entitlements">
+    Learn about entitlements, plans, and usage
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/node/client">
+    Explore all SDK methods
+  </Card>
+  <Card title="Authentication" icon="key" href="/auth/overview">
+    Integrate with Auth0, Clerk, and more
+  </Card>
+</CardGroup>

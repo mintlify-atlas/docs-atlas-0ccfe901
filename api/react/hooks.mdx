@@ -1,0 +1,117 @@
+---
+title: 'React Hooks'
+description: 'React hooks for entitlement checks and client access'
+---
+
+## useRevstack
+
+Returns the `RevstackClient` instance from context.
+
+**Signature**
+```typescript
+function useRevstack(): RevstackClient
+```
+
+**Returns**
+- `RevstackClient` - The client instance configured in `<RevstackProvider>`
+
+**Throws**
+- Error if used outside of `<RevstackProvider>`
+
+**Usage**
+```tsx
+import { useRevstack } from '@revstackhq/react';
+
+function MyComponent() {
+  const client = useRevstack();
+  
+  const handleCheckout = async () => {
+    await client.startCheckout({
+      planId: 'plan_123',
+      successUrl: '/success',
+      cancelUrl: '/pricing',
+    });
+  };
+
+  return <button onClick={handleCheckout}>Subscribe</button>;
+}
+```
+
+---
+
+## useEntitlement
+
+Subscribes to entitlement changes and returns the current state for a feature.
+
+**Signature**
+```typescript
+function useEntitlement(key: string): Entitlement
+```
+
+**Parameters**
+- `key` (string) - The feature key to check
+
+**Returns**
+- `Entitlement` object with:
+  - `key` (string) - The feature key
+  - `hasAccess` (boolean) - Whether the user has access
+  - `value?` (string | number | boolean) - Optional limit or configuration value
+
+**SSR Safe**
+
+This hook uses `useSyncExternalStore` with a server snapshot that returns `{ key, hasAccess: false }`, preventing hydration mismatches in Next.js and Remix.
+
+**Usage**
+
+<CodeGroup>
+```tsx Basic Check
+import { useEntitlement } from '@revstackhq/react';
+
+function FeatureGate() {
+  const entitlement = useEntitlement('premium-feature');
+
+  if (!entitlement.hasAccess) {
+    return <UpgradePrompt />;
+  }
+
+  return <PremiumFeature />;
+}
+```
+
+```tsx With Limits
+import { useEntitlement } from '@revstackhq/react';
+
+function ApiCallCounter() {
+  const entitlement = useEntitlement('api-calls');
+
+  return (
+    <div>
+      <p>Access: {entitlement.hasAccess ? 'Granted' : 'Denied'}</p>
+      {entitlement.value && (
+        <p>Remaining calls: {entitlement.value}</p>
+      )}
+    </div>
+  );
+}
+```
+
+```tsx Loading State
+import { useRevstack, useEntitlement } from '@revstackhq/react';
+
+function Feature() {
+  const client = useRevstack();
+  const entitlement = useEntitlement('advanced-analytics');
+
+  if (!client.isReady) {
+    return <Spinner />;
+  }
+
+  return entitlement.hasAccess ? <Analytics /> : <Paywall />;
+}
+```
+</CodeGroup>
+
+**Notes**
+- Updates automatically when entitlements change
+- Safe for server-side rendering
+- Returns `hasAccess: false` during initial load and on server

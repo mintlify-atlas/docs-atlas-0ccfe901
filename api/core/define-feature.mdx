@@ -1,0 +1,182 @@
+---
+title: defineFeature
+description: Define a feature with full type inference
+---
+
+## Overview
+
+The `defineFeature()` function defines a feature (entitlement) in your billing configuration. It's an identity function that provides type inference and autocomplete while returning the input as-is.
+
+Features represent capabilities or resources in your product that can be gated based on subscription plans.
+
+## Function Signature
+
+```typescript
+function defineFeature<T extends FeatureDefInput>(config: T): T
+```
+
+### Type Parameters
+
+<ParamField path="T" type="T extends FeatureDefInput">
+  The feature configuration type. Must extend `FeatureDefInput`.
+</ParamField>
+
+### Parameters
+
+<ParamField path="config" type="FeatureDefInput" required>
+  The feature configuration object.
+
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      Human-readable display name for the feature (e.g., "Team Seats", "API Calls").
+    </ParamField>
+
+    <ParamField path="description" type="string">
+      Optional description for documentation and dashboard display.
+    </ParamField>
+
+    <ParamField path="type" type="'boolean' | 'static' | 'metered'" required>
+      The data type of the feature:
+      - `boolean`: On/Off flag (e.g., SSO Access)
+      - `static`: Fixed numeric limit included in the plan (e.g., 5 Seats)
+      - `metered`: Usage-based, tracked over time (e.g., AI Tokens)
+    </ParamField>
+
+    <ParamField path="unit_type" type="'count' | 'bytes' | 'seconds' | 'tokens' | 'requests' | 'custom'" required>
+      The unit of measurement for the feature. Used for display, analytics, and billing calculations.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Returns
+
+<ResponseField name="config" type="T">
+  The same configuration object passed in, with full type inference preserved.
+</ResponseField>
+
+## Usage
+
+### Boolean Feature
+
+```typescript
+import { defineFeature } from "@revstack/core";
+
+export const sso = defineFeature({
+  name: "Single Sign-On",
+  description: "SAML/OAuth SSO authentication",
+  type: "boolean",
+  unit_type: "count",
+});
+```
+
+### Static Feature
+
+```typescript
+import { defineFeature } from "@revstack/core";
+
+export const seats = defineFeature({
+  name: "Team Seats",
+  description: "Number of team members who can access the workspace",
+  type: "static",
+  unit_type: "count",
+});
+```
+
+### Metered Feature
+
+```typescript
+import { defineFeature } from "@revstack/core";
+
+export const apiCalls = defineFeature({
+  name: "API Calls",
+  description: "Monthly API request quota",
+  type: "metered",
+  unit_type: "requests",
+});
+
+export const storage = defineFeature({
+  name: "Cloud Storage",
+  description: "Total storage capacity in bytes",
+  type: "metered",
+  unit_type: "bytes",
+});
+
+export const aiTokens = defineFeature({
+  name: "AI Tokens",
+  description: "LLM token usage for AI features",
+  type: "metered",
+  unit_type: "tokens",
+});
+```
+
+### Complete Configuration
+
+```typescript
+import { defineConfig, defineFeature, definePlan } from "@revstack/core";
+
+export default defineConfig({
+  features: {
+    // Boolean feature
+    sso: defineFeature({
+      name: "Single Sign-On",
+      type: "boolean",
+      unit_type: "count",
+    }),
+    
+    // Static feature
+    seats: defineFeature({
+      name: "Team Seats",
+      type: "static",
+      unit_type: "count",
+    }),
+    
+    // Metered feature
+    api_calls: defineFeature({
+      name: "API Calls",
+      type: "metered",
+      unit_type: "requests",
+    }),
+  },
+  plans: {
+    starter: definePlan({
+      name: "Starter",
+      is_default: true,
+      is_public: true,
+      type: "free",
+      features: {
+        sso: { value_bool: false },
+        seats: { value_limit: 3 },
+        api_calls: { value_limit: 1000, reset_period: "monthly" },
+      },
+    }),
+  },
+});
+```
+
+## Feature Types Explained
+
+### Boolean Features
+Simple on/off toggles. Use `value_bool: true` or `value_bool: false` in plan feature values.
+
+**Examples**: SSO, Priority Support, Custom Branding
+
+### Static Features
+Fixed limits that don't reset. Use `value_limit` in plan feature values.
+
+**Examples**: Team Seats, Projects, Workspaces
+
+### Metered Features
+Usage-based limits that can reset periodically. Use `value_limit` and `reset_period` in plan feature values.
+
+**Examples**: API Calls, Storage, AI Tokens, Email Sends
+
+## Source
+
+**Location**: [`packages/core/src/define.ts:18-20`](~/workspace/source/packages/core/src/define.ts)
+
+## Related
+
+- [defineConfig](/api/core/define-config) - Define the root configuration
+- [definePlan](/api/core/define-plan) - Define plans that use features
+- [defineAddon](/api/core/define-addon) - Define add-ons that modify features
+- [EntitlementEngine](/api/core/engine) - Evaluate feature access at runtime

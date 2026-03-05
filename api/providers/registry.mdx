@@ -1,0 +1,435 @@
+---
+title: "Provider Registry"
+description: "Dynamically register and load billing provider implementations"
+---
+
+The `@revstackhq/providers-registry` package provides a runtime registry system for managing billing provider implementations. It handles lazy-loading, manifest extraction, and provider instantiation.
+
+## Registry Functions
+
+### registerProvider
+
+Registers a provider loader function in the global registry. This is typically called during application initialization.
+
+```typescript
+function registerProvider(slug: string, loader: ProviderLoader): void
+```
+
+<ParamField path="slug" type="string" required>
+  Unique provider identifier (e.g., `"stripe"`, `"paddle"`, `"polar"`)
+</ParamField>
+
+<ParamField path="loader" type="ProviderLoader" required>
+  Lazy loader function that returns the provider module
+</ParamField>
+
+<CodeGroup>
+```typescript Manual Registration
+import { registerProvider } from "@revstackhq/providers-registry";
+
+registerProvider("stripe", async () => {
+  return await import("@revstackhq/provider-stripe");
+});
+
+registerProvider("paddle", async () => {
+  return await import("@revstackhq/provider-paddle");
+});
+```
+
+```typescript Auto-registration
+import { buildCatalog } from "@revstackhq/providers-registry";
+
+const catalog = await buildCatalog({
+  stripe: () => import("@revstackhq/provider-stripe"),
+  paddle: () => import("@revstackhq/provider-paddle"),
+  polar: () => import("@revstackhq/provider-polar"),
+});
+```
+</CodeGroup>
+
+### getProviderLoader
+
+Retrieves a registered provider loader by slug.
+
+```typescript
+function getProviderLoader(slug: string): ProviderLoader | undefined
+```
+
+<ParamField path="slug" type="string" required>
+  The provider slug to look up
+</ParamField>
+
+**Returns:** `ProviderLoader | undefined` - The loader function if registered, otherwise `undefined`
+
+```typescript
+import { getProviderLoader } from "@revstackhq/providers-registry";
+
+const loader = getProviderLoader("stripe");
+if (loader) {
+  const module = await loader();
+  console.log(module.manifest);
+}
+```
+
+### listRegisteredProviders
+
+Returns an array of all registered provider slugs in alphabetical order.
+
+```typescript
+function listRegisteredProviders(): string[]
+```
+
+**Returns:** `string[]` - Sorted array of provider slugs
+
+```typescript
+import { listRegisteredProviders } from "@revstackhq/providers-registry";
+
+const providers = listRegisteredProviders();
+console.log("Available providers:", providers);
+// Output: ["paddle", "polar", "stripe"]
+```
+
+### loadManifest
+
+Loads and extracts the manifest from a provider module.
+
+```typescript
+async function loadManifest(
+  slug: string,
+  loader: ProviderLoader
+): Promise<ProviderManifest | null>
+```
+
+<ParamField path="slug" type="string" required>
+  Provider slug (used for error messages)
+</ParamField>
+
+<ParamField path="loader" type="ProviderLoader" required>
+  The provider loader function
+</ParamField>
+
+**Returns:** `ProviderManifest | null` - The provider's manifest, or `null` if loading failed
+
+```typescript
+import { loadManifest } from "@revstackhq/providers-registry";
+
+const loader = () => import("@revstackhq/provider-stripe");
+const manifest = await loadManifest("stripe", loader);
+
+if (manifest) {
+  console.log(`${manifest.name} v${manifest.version}`);
+  console.log("Capabilities:", manifest.capabilities);
+}
+```
+
+<Note>
+  **Manifest validation**: If a provider module doesn't export a `manifest` constant, this function returns `null` and logs an error.
+</Note>
+
+### buildCatalog
+
+Registers multiple providers at once and extracts their manifests. This is the recommended way to initialize the provider registry.
+
+```typescript
+async function buildCatalog(
+  config: Record<string, ProviderLoader>
+): Promise<ProviderManifest[]>
+```
+
+<ParamField path="config" type="Record<string, ProviderLoader>" required>
+  Map of provider slugs to their loader functions
+</ParamField>
+
+**Returns:** `Promise<ProviderManifest[]>` - Array of successfully loaded manifests
+
+```typescript
+import { buildCatalog } from "@revstackhq/providers-registry";
+
+const manifests = await buildCatalog({
+  stripe: () => import("@revstackhq/provider-stripe"),
+  paddle: () => import("@revstackhq/provider-paddle"),
+  polar: () => import("@revstackhq/provider-polar"),
+  paypal: () => import("@revstackhq/provider-paypal"),
+});
+
+console.log(`Loaded ${manifests.length} providers`);
+
+// Display provider info
+manifests.forEach(manifest => {
+  console.log(`- ${manifest.name} (${manifest.slug})`);
+  console.log(`  Version: ${manifest.version}`);
+  console.log(`  Status: ${manifest.status}`);
+});
+```
+
+## ProviderFactory
+
+Factory class for instantiating provider SDK instances.
+
+### create
+
+Creates a provider instance by slug. The provider must be registered before calling this method.
+
+```typescript
+static async create(slug: string): Promise<IProvider>
+```
+
+<ParamField path="slug" type="string" required>
+  The provider slug to instantiate
+</ParamField>
+
+**Returns:** `Promise<IProvider>` - Fully initialized provider instance
+
+**Throws:** Error if the provider is not registered or fails to load
+
+```typescript
+import { ProviderFactory } from "@revstackhq/providers-registry";
+
+try {
+  const stripe = await ProviderFactory.create("stripe");
+  
+  // Use the provider
+  const result = await stripe.createCustomer(ctx, {
+    email: "customer@example.com",
+    name: "John Doe",
+  });
+  
+  console.log("Customer ID:", result.data);
+} catch (error) {
+  console.error("Failed to create provider:", error.message);
+}
+```
+
+<Warning>
+  **Registration required**: `ProviderFactory.create()` will throw an error if the provider hasn't been registered via `registerProvider()` or `buildCatalog()`.
+</Warning>
+
+## Types
+
+### ProviderLoader
+
+Type definition for a provider lazy-loader function:
+
+```typescript
+type ProviderLoader = () => Promise<ProviderModule>
+```
+
+The loader should return a dynamic import that resolves to a `ProviderModule`.
+
+### ProviderModule
+
+The expected structure of a provider package:
+
+<ResponseField name="DefaultProvider" type="new () => IProvider" required>
+  The provider class constructor. Must implement `IProvider`
+</ResponseField>
+
+<ResponseField name="manifest" type="ProviderManifest" required>
+  The provider's manifest containing metadata and capabilities
+</ResponseField>
+
+```typescript
+interface ProviderModule {
+  DefaultProvider: new () => IProvider;
+  manifest: ProviderManifest;
+}
+```
+
+Example provider package structure:
+
+```typescript
+// @revstackhq/provider-stripe/src/index.ts
+import { IProvider, ProviderManifest } from "@revstackhq/providers-core";
+
+export const manifest: ProviderManifest = {
+  slug: "stripe",
+  name: "Stripe",
+  version: "1.2.0",
+  // ... other manifest fields
+};
+
+export class DefaultProvider implements IProvider {
+  readonly manifest = manifest;
+  
+  // Implement IProvider methods...
+}
+```
+
+## Complete Example
+
+Here's a complete example of setting up and using the provider registry:
+
+```typescript
+import {
+  registerProvider,
+  buildCatalog,
+  listRegisteredProviders,
+  ProviderFactory,
+} from "@revstackhq/providers-registry";
+
+// Option 1: Register providers individually
+registerProvider("stripe", () => import("@revstackhq/provider-stripe"));
+registerProvider("paddle", () => import("@revstackhq/provider-paddle"));
+
+// Option 2: Register providers in bulk (recommended)
+const manifests = await buildCatalog({
+  stripe: () => import("@revstackhq/provider-stripe"),
+  paddle: () => import("@revstackhq/provider-paddle"),
+  polar: () => import("@revstackhq/provider-polar"),
+});
+
+// List all registered providers
+const availableProviders = listRegisteredProviders();
+console.log("Available providers:", availableProviders);
+
+// Create provider instances
+const stripe = await ProviderFactory.create("stripe");
+const paddle = await ProviderFactory.create("paddle");
+
+// Use the providers
+const ctx = {
+  logger: console,
+  config: {
+    apiKey: process.env.STRIPE_API_KEY,
+  },
+  metadata: {
+    workspaceId: "ws_123",
+  },
+};
+
+const customerResult = await stripe.createCustomer(ctx, {
+  email: "customer@example.com",
+  name: "Jane Smith",
+});
+
+if (customerResult.status === "success") {
+  console.log("Customer created:", customerResult.data);
+}
+```
+
+## Dynamic Provider Loading
+
+The registry system supports dynamic provider loading at runtime, which is useful for:
+
+- **Reducing bundle size**: Only load providers that are actually used
+- **Plugin systems**: Allow users to install custom providers
+- **Multi-tenant setups**: Load different providers per workspace
+
+### Example: Dynamic Loading
+
+```typescript
+import { registerProvider, ProviderFactory } from "@revstackhq/providers-registry";
+
+// Function to dynamically register a provider at runtime
+async function enableProvider(slug: string) {
+  const loaderMap = {
+    stripe: () => import("@revstackhq/provider-stripe"),
+    paddle: () => import("@revstackhq/provider-paddle"),
+    polar: () => import("@revstackhq/provider-polar"),
+    // Add more as needed
+  };
+
+  const loader = loaderMap[slug];
+  if (!loader) {
+    throw new Error(`Unknown provider: ${slug}`);
+  }
+
+  registerProvider(slug, loader);
+  console.log(`Provider '${slug}' registered successfully`);
+}
+
+// Later in your application
+await enableProvider("stripe");
+const stripe = await ProviderFactory.create("stripe");
+```
+
+## Error Handling
+
+The factory and registry functions provide detailed error messages:
+
+```typescript
+import { ProviderFactory, listRegisteredProviders } from "@revstackhq/providers-registry";
+
+try {
+  const provider = await ProviderFactory.create("unknown-provider");
+} catch (error) {
+  console.error(error.message);
+  // Output: Provider 'unknown-provider' is not registered in Revstack. 
+  //         Available providers: [paddle, polar, stripe]
+  
+  // You can also check available providers programmatically
+  const available = listRegisteredProviders();
+  console.log("Available providers:", available);
+}
+```
+
+## Best Practices
+
+<Tip>
+  **Use buildCatalog for initialization**: It's more concise and performs batch loading efficiently.
+</Tip>
+
+<Note>
+  **Lazy loading benefits**: Provider modules are only loaded when first used, reducing initial bundle size and startup time.
+</Note>
+
+<Warning>
+  **Module structure validation**: Ensure your provider modules export both `DefaultProvider` (class) and `manifest` (object). Missing exports will cause runtime errors.
+</Warning>
+
+## Use Cases
+
+### Multi-Provider Application
+
+```typescript
+import { buildCatalog, ProviderFactory } from "@revstackhq/providers-registry";
+
+// Initialize all providers
+await buildCatalog({
+  stripe: () => import("@revstackhq/provider-stripe"),
+  paddle: () => import("@revstackhq/provider-paddle"),
+});
+
+// Function to get provider based on workspace config
+async function getWorkspaceProvider(workspaceId: string) {
+  const workspace = await db.workspaces.findById(workspaceId);
+  return await ProviderFactory.create(workspace.billingProvider);
+}
+
+// Use in request handler
+app.post("/api/customers", async (req, res) => {
+  const provider = await getWorkspaceProvider(req.workspaceId);
+  const result = await provider.createCustomer(ctx, req.body);
+  res.json(result);
+});
+```
+
+### Provider Marketplace UI
+
+```typescript
+import { buildCatalog } from "@revstackhq/providers-registry";
+
+const manifests = await buildCatalog({
+  stripe: () => import("@revstackhq/provider-stripe"),
+  paddle: () => import("@revstackhq/provider-paddle"),
+  polar: () => import("@revstackhq/provider-polar"),
+});
+
+// Display providers in UI
+manifests.forEach(manifest => {
+  renderProviderCard({
+    name: manifest.name,
+    description: manifest.description,
+    icon: manifest.media.icon,
+    status: manifest.status,
+    categories: manifest.categories,
+    pricing: manifest.pricing,
+    capabilities: manifest.capabilities,
+  });
+});
+```
+
+## Related
+
+- [Provider Core](/api/providers/core) - Base interfaces and types
+- [Provider Manifest](/api/providers/manifest) - Manifest schema reference

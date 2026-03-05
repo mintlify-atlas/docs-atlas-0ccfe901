@@ -1,0 +1,445 @@
+---
+title: CLI Commands
+description: Complete reference for all Revstack CLI commands
+---
+
+This page provides detailed documentation for all available Revstack CLI commands.
+
+## Global Options
+
+These options work with any command:
+
+| Option        | Description           |
+| ------------- | --------------------- |
+| `--version`   | Print the CLI version |
+| `--help`      | Display help          |
+
+## init
+
+Scaffold a new `revstack.config.ts` and `revstack/` directory structure in the current directory.
+
+### Usage
+
+```bash
+revstack init [options]
+```
+
+### Options
+
+| Option                    | Description                                              | Default   |
+| ------------------------- | -------------------------------------------------------- | --------- |
+| `-t, --template <name>`   | Choose a starting template                               | `starter` |
+
+### Available Templates
+
+- **starter**: Basic setup with a free default plan and a paid plan
+- **b2b-saas**: Tiered pricing model for business software
+- **usage-based**: Metered billing for API/infrastructure products
+- **ecommerce-platform**: Transaction-based pricing
+- **developer-tools**: Per-developer seat licensing
+- **ai-agent-platform**: Token-based consumption pricing
+
+### Examples
+
+Initialize with the default starter template:
+
+```bash
+revstack init
+```
+
+Initialize with the B2B SaaS template:
+
+```bash
+revstack init --template b2b-saas
+```
+
+Initialize with the usage-based template:
+
+```bash
+revstack init -t usage-based
+```
+
+### Behavior
+
+1. Checks if `revstack.config.ts` already exists (exits if found)
+2. Creates a `revstack/` directory with the following files:
+   - `features.ts` - Feature definitions
+   - `plans.ts` - Plan definitions
+   - `addons.ts` - Add-on definitions
+   - `coupons.ts` - Coupon definitions
+   - `index.ts` - Exports all entities
+3. Creates `revstack.config.ts` that imports and combines all entities
+4. Detects your package manager (npm, yarn, or pnpm)
+5. Attempts to install `@revstackhq/core` automatically
+
+### Output
+
+```
+  ✔ Created revstack config structure
+
+    Includes the Default Guest Plan (required by Revstack).
+
+    Next steps:
+    1. Edit the config to match your billing model
+    2. Run revstack login to authenticate
+    3. Run revstack push to deploy
+```
+
+---
+
+## login
+
+Authenticate with your Revstack Secret Key and store credentials locally.
+
+### Usage
+
+```bash
+revstack login
+```
+
+### Behavior
+
+1. Prompts for your Revstack Secret Key (input is hidden)
+2. Validates that the key starts with `sk_`
+3. Saves the key to `~/.revstack/credentials.json`
+
+### Output
+
+```
+  Revstack — Authentication
+
+? Enter your Revstack Secret Key: [hidden]
+
+  ✔ Authenticated successfully!
+    Credentials saved to ~/.revstack/credentials.json
+```
+
+### Security
+
+- Credentials are stored locally on your machine only
+- The credentials file is created with appropriate permissions
+- The secret key never leaves your machine except when making authenticated API calls
+
+### Getting Your Secret Key
+
+1. Log in to the [Revstack Dashboard](https://app.revstack.dev)
+2. Navigate to Settings > API Keys
+3. Copy your Secret Key (starts with `sk_`)
+
+---
+
+## logout
+
+Clear stored Revstack credentials from your machine.
+
+### Usage
+
+```bash
+revstack logout
+```
+
+### Behavior
+
+1. Checks if credentials exist
+2. Removes `~/.revstack/credentials.json`
+
+### Output
+
+If logged in:
+
+```
+  ✔ Successfully logged out.
+    Credentials removed from ~/.revstack/credentials.json
+```
+
+If not logged in:
+
+```
+  Not currently logged in.
+```
+
+---
+
+## push
+
+Push your local billing configuration to Revstack Cloud. This command validates your config, calculates a diff, and deploys changes after confirmation.
+
+### Usage
+
+```bash
+revstack push [options]
+```
+
+### Options
+
+| Option                  | Description          | Default |
+| ----------------------- | -------------------- | ------- |
+| `-e, --env <environment>` | Target environment | `test`  |
+
+### Examples
+
+Push to test environment (default):
+
+```bash
+revstack push
+```
+
+Push to production:
+
+```bash
+revstack push --env production
+```
+
+Push to a custom environment:
+
+```bash
+revstack push -e staging
+```
+
+### Behavior
+
+1. **Authentication Check**: Verifies you're logged in
+2. **Config Loading**: Loads and parses `revstack.config.ts`
+3. **Validation**: Performs two-tier validation:
+   - **Tier 1**: Schema validation (correct structure, types, required fields)
+   - **Tier 2**: Business logic validation (valid feature references, pricing rules, etc.)
+4. **Diff Calculation**: Sends config to Revstack API to compute changes
+5. **Change Preview**: Displays color-coded diff with additions, removals, and updates
+6. **Confirmation**: Prompts for confirmation (especially prominent for production)
+7. **Deployment**: Applies changes to the target environment
+
+### Output
+
+```
+ ✔ Configuration validated
+ ✔ Diff calculated
+
+  Changes:
+
+  features
+  + ai_tokens AI Tokens (metered, count)
+  ~ seats Updated value_limit from 10 to 5
+
+  plans
+  + enterprise Enterprise plan
+  ~ pro Updated pricing
+
+  Summary: 2 added, 2 updated, 0 removed
+
+? Apply these changes to test? (y/N) › yes
+
+ ✔ Pushed successfully
+
+  ✔ Config deployed to test
+    Changes are now live.
+```
+
+### Production Warning
+
+When pushing to production, you'll see a prominent warning:
+
+```
+  ⚠️  YOU ARE PUSHING TO PRODUCTION ⚠️  
+```
+
+### Validation Errors
+
+**Schema errors:**
+
+```
+ ✖ Configuration invalid
+
+  ✖ The billing configuration contains schema/formatting errors:
+
+    • [plans.pro.prices.0.amount] Required
+    • [features.api_calls.type] Invalid enum value
+```
+
+**Business logic errors:**
+
+```
+ ✖ Configuration invalid
+
+  ✖ The billing configuration contains business logic errors:
+
+    • Plan "pro" references unknown feature "unknown_feature"
+    • Feature "seats" used in multiple plans with conflicting settings
+```
+
+### Blocked Pushes
+
+Some changes are destructive and cannot be pushed (e.g., deleting a plan with active subscribers):
+
+```
+  BLOCKED: PUSH IMPOSSIBLE
+
+  ✖ Cannot delete plan "pro" because it has 47 active subscribers.
+    Please migrate users first or contact support.
+```
+
+---
+
+## pull
+
+Pull the remote billing configuration from Revstack Cloud and overwrite your local `revstack.config.ts` and `revstack/` files.
+
+### Usage
+
+```bash
+revstack pull [options]
+```
+
+### Options
+
+| Option                  | Description          | Default |
+| ----------------------- | -------------------- | ------- |
+| `-e, --env <environment>` | Target environment | `test`  |
+
+### Examples
+
+Pull from test environment (default):
+
+```bash
+revstack pull
+```
+
+Pull from production:
+
+```bash
+revstack pull --env production
+```
+
+Pull from a custom environment:
+
+```bash
+revstack pull -e staging
+```
+
+### Behavior
+
+1. **Authentication Check**: Verifies you're logged in
+2. **Fetch Remote Config**: Downloads the current config from Revstack Cloud
+3. **Schema Validation**: Validates the remote config against the schema
+4. **Summary Display**: Shows what will be pulled (feature count, plan count, etc.)
+5. **Confirmation**: Asks for confirmation before overwriting local files
+6. **File Generation**: Regenerates all local config files from remote state
+7. **Formatting**: Runs Prettier to format the generated files (if available)
+
+### Output
+
+```
+ ✔ Remote config fetched
+
+  Remote state: 5 features, 4 plans, 2 addons, 3 coupons (test)
+
+? This will overwrite your local configuration files (revstack.config.ts and revstack/ data). Are you sure? (y/N) › yes
+
+ ✔ Files formatted successfully
+
+  ✔ Local files updated from remote.
+    Review the files and run revstack push to re-deploy.
+```
+
+### Use Cases
+
+**Syncing dashboard changes:**
+```bash
+# After making changes in the Revstack Dashboard
+revstack pull --env production
+```
+
+**Cloning production to test:**
+```bash
+# Pull production config
+revstack pull --env production
+
+# Review changes
+git diff
+
+# Push to test
+revstack push --env test
+```
+
+**Team collaboration:**
+```bash
+# Pull latest config from remote
+revstack pull
+
+# Make local changes
+vim revstack/plans.ts
+
+# Push changes back
+revstack push
+```
+
+### Generated Files
+
+The pull command regenerates:
+- `revstack.config.ts`
+- `revstack/features.ts`
+- `revstack/plans.ts`
+- `revstack/addons.ts` (if addons exist)
+- `revstack/coupons.ts` (if coupons exist)
+- `revstack/index.ts`
+
+All files are formatted with Prettier if available in your project.
+
+---
+
+## Environment Variables
+
+The CLI respects the following environment variables:
+
+| Variable           | Description                          | Default                       |
+| ------------------ | ------------------------------------ | ----------------------------- |
+| `REVSTACK_API_URL` | Override the Revstack API base URL   | `https://app.revstack.dev`    |
+
+### Example
+
+```bash
+export REVSTACK_API_URL=https://staging.revstack.dev
+revstack push
+```
+
+---
+
+## Exit Codes
+
+| Code | Meaning                                      |
+| ---- | -------------------------------------------- |
+| 0    | Success                                      |
+| 1    | Error (validation failed, API error, etc.)   |
+
+---
+
+## Troubleshooting
+
+### "Not authenticated" error
+
+Run `revstack login` to authenticate with your secret key.
+
+### "revstack.config.ts already exists"
+
+The `init` command won't overwrite existing configs. Delete the file first or manually edit it.
+
+### Config validation fails
+
+Check the error messages carefully:
+- **Schema errors**: Usually typos, missing required fields, or incorrect types
+- **Business logic errors**: Invalid references between entities or conflicting settings
+
+### Push blocked
+
+Some changes are destructive (e.g., deleting active plans). The error message will explain why and suggest alternatives.
+
+### Pull overwrites local changes
+
+Always commit your changes before running `pull`. Review the diff with `git diff` before deploying.
+
+---
+
+## Next Steps
+
+- [Configuration Guide](/guides/configuration) - Learn how to configure plans, features, and pricing
+- [Environment Management](/guides/environments) - Best practices for managing multiple environments
+- [API Reference](/api-reference) - Use the Revstack SDK in your application

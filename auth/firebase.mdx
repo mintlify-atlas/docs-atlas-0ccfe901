@@ -1,0 +1,428 @@
+---
+title: "Firebase Integration"
+description: "Verify Firebase Auth JWTs in your Revstack application"
+---
+
+## Overview
+
+Firebase Authentication uses RS256 signing with Google's SecureToken JWKS for token verification. This guide shows you how to integrate Firebase Auth with Revstack.
+
+## Prerequisites
+
+- A Firebase project
+- Firebase Authentication enabled
+- Your Firebase project ID
+
+## Installation
+
+```bash
+npm install @revstackhq/auth
+```
+
+## Configuration
+
+### 1. Get your Firebase project ID
+
+From the Firebase Console:
+
+1. Go to **Project Settings** (gear icon)
+2. Note your **Project ID** (e.g., `my-firebase-project`)
+
+### 2. Build the auth contract
+
+Create an auth contract using your Firebase project ID:
+
+```typescript
+import { buildAuthContract } from "@revstackhq/auth";
+
+const authContract = buildAuthContract("firebase", {
+  projectId: "my-firebase-project",
+});
+```
+
+The contract builder automatically:
+- Sets the JWKS URI to Google's SecureToken endpoint: `https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com`
+- Sets the issuer to `https://securetoken.google.com/my-firebase-project`
+- Sets the audience to your project ID
+- Configures RS256 verification strategy
+
+## Verification
+
+### Initialize the verifier
+
+```typescript
+import { RevstackAuth } from "@revstackhq/auth";
+
+const auth = new RevstackAuth(authContract);
+```
+
+### Verify tokens
+
+In your API routes or middleware:
+
+```typescript
+export async function authMiddleware(req, res, next) {
+  const session = await auth.validate(req.headers.authorization);
+
+  if (!session.isValid) {
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Attach user info to request
+  req.userId = session.userId; // Firebase user UID
+  req.claims = session.claims; // Full JWT payload
+  
+  next();
+}
+```
+
+## Token structure
+
+Firebase Auth ID tokens contain standard claims plus Firebase-specific fields:
+
+```json
+{
+  "iss": "https://securetoken.google.com/my-firebase-project",
+  "sub": "abcd1234efgh5678ijkl",
+  "aud": "my-firebase-project",
+  "auth_time": 1516239022,
+  "iat": 1516239022,
+  "exp": 1516242622,
+  "email": "user@example.com",
+  "email_verified": true,
+  "firebase": {
+    "identities": {
+      "email": ["user@example.com"]
+    },
+    "sign_in_provider": "password"
+  },
+  "user_id": "abcd1234efgh5678ijkl"
+}
+```
+
+### Accessing Firebase claims
+
+You can access Firebase-specific claims using typed interfaces:
+
+```typescript
+interface FirebaseClaims {
+  email?: string;
+  email_verified?: boolean;
+  phone_number?: string;
+  name?: string;
+  picture?: string;
+  firebase: {
+    identities: Record<string, string[]>;
+    sign_in_provider: string;
+  };
+  user_id: string;
+}
+
+const session = await auth.validate<FirebaseClaims>(token);
+
+if (session.isValid) {
+  console.log(session.userId); // "abcd1234efgh5678ijkl"
+  console.log(session.claims.email); // "user@example.com"
+  console.log(session.claims.firebase.sign_in_provider); // "password", "google.com", etc.
+}
+```
+
+## Custom claims
+
+Firebase allows you to set custom claims on user tokens via the Admin SDK. These claims are accessible in the verified session:
+
+```typescript
+// Setting custom claims (Firebase Admin SDK)
+import { getAuth } from "firebase-admin/auth";
+
+await getAuth().setCustomUserClaims(userId, {
+  role: "admin",
+  plan: "pro",
+});
+```
+
+```typescript
+// Accessing custom claims (Revstack)
+interface CustomFirebaseClaims {
+  role?: string;
+  plan?: string;
+}
+
+const session = await auth.validate<CustomFirebaseClaims>(token);
+
+if (session.isValid) {
+  console.log(session.claims.role); // "admin"
+  console.log(session.claims.plan); // "pro"
+}
+```
+
+<Note>
+Custom claims in Firebase are set server-side using the Admin SDK. They appear directly in the token payload without any prefix.
+</Note>
+
+## Sign-in providers
+
+Firebase supports multiple authentication providers. You can check which provider was used:
+
+```typescript
+const session = await auth.validate(token);
+
+if (session.isValid) {
+  const provider = session.claims.firebase.sign_in_provider;
+  
+  switch (provider) {
+    case "password":
+      console.log("Email/password sign-in");
+      break;
+    case "google.com":
+      console.log("Google sign-in");
+      break;
+    case "github.com":
+      console.log("GitHub sign-in");
+      break;
+    // ... other providers
+  }
+}
+```
+
+## Complete example
+
+Here's a full Express.js integration:
+
+```typescript
+import express from "express";
+import { buildAuthContract, RevstackAuth, AuthErrorCode } from "@revstackhq/auth";
+
+// Build contract once at startup
+const authContract = buildAuthContract("firebase", {
+  projectId: process.env.FIREBASE_PROJECT_ID!,
+});
+
+const auth = new RevstackAuth(authContract);
+
+const app = express();
+
+// Auth middleware
+app.use(async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader) {
+    return res.status(401).json({ error: "Missing authorization header" });
+  }
+
+  const session = await auth.validate(authHeader);
+
+  if (!session.isValid) {
+    if (session.errorCode === AuthErrorCode.TOKEN_EXPIRED) {
+      return res.status(401).json({ 
+        error: "Session expired. Please sign in again.",
+        code: "session_expired" 
+      });
+    }
+    
+    return res.status(401).json({ error: session.error });
+  }
+
+  // Store user info on request
+  req.userId = session.userId;
+  req.email = session.claims.email;
+  req.emailVerified = session.claims.email_verified;
+  
+  next();
+});
+
+// Protected route
+app.get("/api/profile", (req, res) => {
+  res.json({
+    userId: req.userId,
+    email: req.email,
+    emailVerified: req.emailVerified,
+  });
+});
+
+app.listen(3000);
+```
+
+## Frontend integration
+
+When calling your API from a Firebase-enabled frontend:
+
+```typescript
+import { getAuth } from "firebase/auth";
+
+const auth = getAuth();
+
+async function callAPI() {
+  const user = auth.currentUser;
+  
+  if (!user) {
+    throw new Error("Not authenticated");
+  }
+  
+  // Get the ID token
+  const token = await user.getIdToken();
+  
+  const response = await fetch("/api/profile", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  
+  return response.json();
+}
+```
+
+### Token refresh
+
+Firebase ID tokens expire after 1 hour. The Firebase SDK automatically refreshes them, but you should handle token refresh in your API calls:
+
+```typescript
+import { getAuth } from "firebase/auth";
+
+const auth = getAuth();
+
+async function callAPIWithRetry() {
+  const user = auth.currentUser;
+  
+  if (!user) {
+    throw new Error("Not authenticated");
+  }
+  
+  // Force refresh if needed
+  const token = await user.getIdToken(/* forceRefresh */ false);
+  
+  const response = await fetch("/api/profile", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  
+  // If token expired, refresh and retry
+  if (response.status === 401) {
+    const freshToken = await user.getIdToken(true); // Force refresh
+    
+    return fetch("/api/profile", {
+      headers: {
+        Authorization: `Bearer ${freshToken}`,
+      },
+    });
+  }
+  
+  return response;
+}
+```
+
+## Email verification enforcement
+
+You can enforce that users have verified their email addresses:
+
+```typescript
+const session = await auth.validate(token);
+
+if (!session.isValid) {
+  return res.status(401).json({ error: session.error });
+}
+
+if (!session.claims.email_verified) {
+  return res.status(403).json({ 
+    error: "Please verify your email address before accessing this resource." 
+  });
+}
+
+// Continue with verified user
+```
+
+## Environment variables
+
+Store your Firebase configuration in environment variables:
+
+```bash
+# .env
+FIREBASE_PROJECT_ID=my-firebase-project
+```
+
+## Testing
+
+To test your integration:
+
+1. Sign in via your Firebase-enabled frontend
+2. Obtain the ID token using `user.getIdToken()`
+3. Send it in the Authorization header: `Bearer <token>`
+4. Verify the token is validated correctly
+
+You can also generate custom tokens for testing using the Firebase Admin SDK:
+
+```typescript
+import { getAuth } from "firebase-admin/auth";
+
+const customToken = await getAuth().createCustomToken(userId, {
+  // Optional custom claims
+  role: "admin",
+});
+
+// Exchange the custom token for an ID token in your frontend
+```
+
+## Troubleshooting
+
+### "Issuer mismatch" error
+
+Verify that:
+- Your Firebase project ID is correct
+- The token was issued by Firebase (not a different service)
+- You're using the project ID, not the project name
+
+### "Invalid signature" error
+
+Check that:
+- The token was issued by Firebase Authentication
+- The token hasn't been tampered with
+- The JWKS endpoint (Google's SecureToken service) is accessible
+
+### "Audience validation failed" error
+
+Ensure:
+- The `projectId` in your contract matches your Firebase project
+- The token's `aud` claim matches your project ID
+
+### Network errors
+
+If you get network errors when fetching the JWKS:
+- Verify your server can access `https://www.googleapis.com`
+- Check for firewall rules blocking outbound HTTPS requests
+- Ensure your DNS can resolve `googleapis.com`
+
+## Firestore integration
+
+If you're using Firestore alongside Firebase Auth, you can use the verified user ID to query user-specific data:
+
+```typescript
+import { getFirestore } from "firebase-admin/firestore";
+
+const db = getFirestore();
+
+// After validating the token
+const session = await auth.validate(token);
+
+if (session.isValid) {
+  // Query user's subscriptions
+  const subscriptionsRef = db
+    .collection('subscriptions')
+    .where('userId', '==', session.userId);
+  
+  const snapshot = await subscriptionsRef.get();
+  const subscriptions = snapshot.docs.map(doc => doc.data());
+}
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Auth Overview" icon="book" href="/auth/overview">
+    Learn more about JWT verification in Revstack
+  </Card>
+  
+  <Card title="Error Handling" icon="triangle-exclamation" href="/auth/overview#error-handling">
+    Handle authentication errors gracefully
+  </Card>
+</CardGroup>

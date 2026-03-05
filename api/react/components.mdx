@@ -1,0 +1,141 @@
+---
+title: 'React Components'
+description: 'Provider component for React applications'
+---
+
+## RevstackProvider
+
+Context provider that initializes and manages the Revstack client instance.
+
+**Props**
+
+<ParamField path="config" type="RevstackConfig" required>
+  Configuration object for the Revstack client
+  
+  <Expandable title="RevstackConfig properties">
+    <ParamField path="publicKey" type="string" required>
+      Your project's public key from the Revstack dashboard
+    </ParamField>
+    
+    <ParamField path="getToken" type="() => Promise<string | null>" required>
+      Async function that returns the current user's JWT token, or `null` if unauthenticated
+    </ParamField>
+    
+    <ParamField path="apiUrl" type="string">
+      Custom API base URL (defaults to `https://app.revstack.dev`)
+    </ParamField>
+    
+    <ParamField path="getGuestId" type="() => Promise<string>">
+      Custom guest ID resolver - overrides the default fingerprinting logic
+    </ParamField>
+    
+    <ParamField path="disableFingerprint" type="boolean">
+      Set to `true` to skip browser fingerprinting entirely
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="children" type="ReactNode" required>
+  Your application components
+</ParamField>
+
+**Behavior**
+
+- Instantiates `RevstackClient` once and keeps it stable across re-renders
+- Automatically calls `client.init()` on mount to fetch entitlements
+- Provides the client instance to all child components via context
+- Logs initialization errors to console (non-blocking)
+
+**Usage**
+
+<CodeGroup>
+```tsx Basic Setup
+import { RevstackProvider } from '@revstackhq/react';
+
+function App() {
+  const config = {
+    publicKey: process.env.NEXT_PUBLIC_REVSTACK_KEY!,
+    getToken: async () => {
+      // Return your auth token or null
+      return localStorage.getItem('auth_token');
+    },
+  };
+
+  return (
+    <RevstackProvider config={config}>
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+
+```tsx With Auth Integration
+import { RevstackProvider } from '@revstackhq/react';
+import { useAuth } from '@/lib/auth';
+
+function App() {
+  const { getAccessToken } = useAuth();
+
+  const config = {
+    publicKey: process.env.NEXT_PUBLIC_REVSTACK_KEY!,
+    getToken: async () => getAccessToken(),
+  };
+
+  return (
+    <RevstackProvider config={config}>
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+
+```tsx Anonymous Users Only
+import { RevstackProvider } from '@revstackhq/react';
+
+function App() {
+  const config = {
+    publicKey: process.env.NEXT_PUBLIC_REVSTACK_KEY!,
+    getToken: async () => null, // Always anonymous
+    disableFingerprint: false, // Use browser fingerprinting
+  };
+
+  return (
+    <RevstackProvider config={config}>
+      <YourApp />
+    </RevstackProvider>
+  );
+}
+```
+</CodeGroup>
+
+**Best Practices**
+
+<Warning>
+The `config` object should be memoized or defined outside the component to prevent unnecessary re-initialization:
+
+```tsx
+// ❌ Bad - creates new config on every render
+function App() {
+  return (
+    <RevstackProvider config={{ publicKey: '...', getToken: async () => null }}>
+      {children}
+    </RevstackProvider>
+  );
+}
+
+// ✅ Good - stable config reference
+const config = { publicKey: '...', getToken: async () => null };
+
+function App() {
+  return (
+    <RevstackProvider config={config}>
+      {children}
+    </RevstackProvider>
+  );
+}
+```
+</Warning>
+
+<Info>
+Place `<RevstackProvider>` high in your component tree, typically at the root of your application, so all components can access hooks like `useRevstack()` and `useEntitlement()`.
+</Info>

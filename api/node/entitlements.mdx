@@ -1,0 +1,250 @@
+---
+title: "Entitlements"
+description: "Check feature access and query customer entitlements"
+---
+
+## Overview
+
+The `EntitlementsClient` provides methods for checking and querying feature entitlements. The `check()` method is the core primitive of the SDK — it determines whether a customer is allowed to use a specific feature based on their plan.
+
+## Methods
+
+### check()
+
+Check whether a customer has access to a specific feature. This is the most critical method in the SDK — it evaluates the customer's plan, metered usage, and custom entitlement overrides.
+
+```typescript
+const result = await revstack.entitlements.check(
+  customerId,
+  featureId,
+  options
+);
+```
+
+<ParamField path="customerId" type="string" required>
+  The customer to check.
+  
+  **Example:** `"usr_abc123"`
+</ParamField>
+
+<ParamField path="featureId" type="string" required>
+  The entitlement slug or ID.
+  
+  **Example:** `"api-calls"` or `"ent_abc123"`
+</ParamField>
+
+<ParamField path="options" type="EntitlementCheckOptions">
+  Optional check parameters.
+  
+  <Expandable title="properties">
+    <ParamField path="amount" type="number">
+      The amount of the entitlement to consume.
+      
+      **Default:** `1`
+      
+      **Example:** `10` (for checking if customer can make 10 API calls)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ResponseField name="result" type="EntitlementCheckResult">
+  The check result.
+  
+  <Expandable title="properties">
+    <ResponseField name="allowed" type="boolean">
+      Whether the customer is allowed to perform the action.
+    </ResponseField>
+    
+    <ResponseField name="reason" type="string">
+      Human-readable reason if `allowed` is `false`.
+      
+      **Example:** `"Limit exceeded"`, `"Feature not available on plan"`
+    </ResponseField>
+    
+    <ResponseField name="remainingBalance" type="number">
+      Remaining balance after this check (for metered entitlements).
+    </ResponseField>
+    
+    <ResponseField name="currency" type="string">
+      Currency of the remaining balance (for monetary entitlements).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const { allowed, reason, remainingBalance } = 
+  await revstack.entitlements.check(
+    "usr_abc123",
+    "api-calls",
+    { amount: 10 }
+  );
+
+if (!allowed) {
+  throw new Error(`Access denied: ${reason}`);
+}
+
+console.log(`Remaining: ${remainingBalance} API calls`);
+```
+
+---
+
+### list()
+
+List all active entitlements for a customer, including limits from their plan and any custom overrides.
+
+```typescript
+const entitlements = await revstack.entitlements.list(customerId);
+```
+
+<ParamField path="customerId" type="string" required>
+  The customer whose entitlements to list.
+  
+  **Example:** `"usr_abc123"`
+</ParamField>
+
+<ResponseField name="entitlements" type="Entitlement[]">
+  Array of entitlement definitions the customer has access to.
+  
+  <Expandable title="Entitlement properties">
+    <ResponseField name="id" type="string">
+      Unique identifier with `ent_` prefix.
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Human-readable entitlement name.
+      
+      **Example:** `"API Calls"`
+    </ResponseField>
+    
+    <ResponseField name="slug" type="string">
+      URL-safe unique slug.
+      
+      **Example:** `"api-calls"`
+    </ResponseField>
+    
+    <ResponseField name="type" type="string">
+      Entitlement type: `boolean`, `metered`, `tiered`, etc.
+    </ResponseField>
+    
+    <ResponseField name="unitType" type="string">
+      Unit of measurement: `count`, `bytes`, `seconds`, etc.
+    </ResponseField>
+    
+    <ResponseField name="projectId" type="string">
+      Project this entitlement belongs to.
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string">
+      ISO 8601 timestamp of creation.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Example:**
+
+```typescript
+const entitlements = await revstack.entitlements.list("usr_abc123");
+
+for (const ent of entitlements) {
+  console.log(`${ent.name} (${ent.slug}): ${ent.type}`);
+}
+```
+
+---
+
+### get()
+
+Retrieve a single entitlement definition by ID.
+
+```typescript
+const entitlement = await revstack.entitlements.get(entitlementId);
+```
+
+<ParamField path="entitlementId" type="string" required>
+  The entitlement's unique identifier.
+  
+  **Example:** `"ent_abc123"`
+</ParamField>
+
+<ResponseField name="entitlement" type="Entitlement">
+  The entitlement definition.
+</ResponseField>
+
+**Example:**
+
+```typescript
+const entitlement = await revstack.entitlements.get("ent_abc123");
+console.log(entitlement.name); // "API Calls"
+```
+
+## Common Patterns
+
+### Boolean Entitlements
+
+```typescript
+// Check if a feature is enabled
+const { allowed } = await revstack.entitlements.check(
+  userId,
+  "advanced-analytics"
+);
+
+if (allowed) {
+  // Show advanced analytics dashboard
+}
+```
+
+### Metered Entitlements
+
+```typescript
+// Check before consuming a metered resource
+const { allowed, remainingBalance } = 
+  await revstack.entitlements.check(
+    userId,
+    "ai-tokens",
+    { amount: 500 }
+  );
+
+if (!allowed) {
+  throw new Error("Insufficient tokens");
+}
+
+// Proceed with the operation
+await openai.chat.completions.create({ ... });
+
+// Report actual usage
+await revstack.usage.report({
+  customerId: userId,
+  featureId: "ai-tokens",
+  amount: 500,
+});
+```
+
+### Usage with API Rate Limiting
+
+```typescript
+import { RateLimitError } from "@revstackhq/node";
+
+async function callAPI(userId: string) {
+  try {
+    const { allowed } = await revstack.entitlements.check(
+      userId,
+      "api-calls"
+    );
+    
+    if (!allowed) {
+      throw new RateLimitError("API rate limit exceeded");
+    }
+    
+    // Proceed with API call
+    return await fetch("https://api.example.com/data");
+  } catch (error) {
+    if (error instanceof RateLimitError) {
+      // Handle rate limit error
+      return { error: "Please upgrade your plan" };
+    }
+    throw error;
+  }
+}
+```

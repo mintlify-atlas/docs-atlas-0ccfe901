@@ -1,0 +1,495 @@
+---
+title: 'Node.js SDK'
+description: 'Official Node.js SDK for Revstack — billing infrastructure for SaaS'
+icon: 'node-js'
+---
+
+The Node.js SDK provides a complete server-side API for managing customers, subscriptions, entitlements, usage tracking, and billing operations.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @revstackhq/node
+```
+
+```bash yarn
+yarn add @revstackhq/node
+```
+
+```bash pnpm
+pnpm add @revstackhq/node
+```
+</CodeGroup>
+
+## Quick Start
+
+Initialize the SDK with your secret key:
+
+```typescript
+import { Revstack } from "@revstackhq/node";
+
+const revstack = new Revstack({
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+});
+```
+
+<Tip>
+Get your secret key from the [Revstack Dashboard](https://app.revstack.dev). Never expose it in client-side code.
+</Tip>
+
+## Architecture
+
+The SDK is organized into two namespaces:
+
+- **Data Plane** (`revstack.*`) — Daily backend operations: entitlement checks, usage reporting, subscriptions
+- **Control Plane** (`revstack.admin.*`) — Infrastructure management: plan CRUD, Billing as Code sync
+
+## Data Plane
+
+### Customers
+
+Manage end-user (customer) records.
+
+```typescript
+// Identify (upsert) a customer
+const customer = await revstack.customers.identify({
+  customerId: "user-123",
+  email: "john@acme.com",
+  metadata: { plan: "pro" },
+});
+
+// Get a customer
+const customer = await revstack.customers.get("user-123");
+
+// Update customer
+await revstack.customers.update("user-123", {
+  email: "newemail@acme.com",
+});
+
+// List customers with pagination
+const { data, total } = await revstack.customers.list({
+  limit: 50,
+  offset: 0,
+});
+
+// Delete customer
+await revstack.customers.delete("user-123");
+```
+
+### Subscriptions
+
+Create, manage, and modify customer subscriptions.
+
+```typescript
+// Create a subscription
+const subscription = await revstack.subscriptions.create({
+  customerId: "user-123",
+  planId: "plan_pro",
+});
+
+// Get subscription
+const sub = await revstack.subscriptions.get("sub_abc");
+
+// List subscriptions
+const { data } = await revstack.subscriptions.list({
+  customerId: "user-123",
+  status: "active",
+});
+
+// Change plan (upgrade/downgrade)
+await revstack.subscriptions.changePlan("sub_abc", {
+  planId: "plan_enterprise",
+});
+
+// Cancel subscription
+await revstack.subscriptions.cancel("sub_abc");
+```
+
+<Info>
+Canceled subscriptions remain active until the end of the current billing period.
+</Info>
+
+### Entitlements
+
+Check feature access and query entitlements.
+
+```typescript
+// Check if customer can use a feature
+const { allowed, reason, remainingBalance } = await revstack.entitlements.check(
+  "user-123",
+  "api-calls",
+  { amount: 10 }
+);
+
+if (!allowed) {
+  throw new Error(`Access denied: ${reason}`);
+}
+
+// List all entitlements for a customer
+const entitlements = await revstack.entitlements.list("user-123");
+
+// Get a specific entitlement
+const entitlement = await revstack.entitlements.get("ent_abc");
+```
+
+<Warning>
+Always check entitlements before allowing access to premium features.
+</Warning>
+
+### Usage Tracking
+
+Report and query metered feature usage.
+
+```typescript
+// Report usage
+await revstack.usage.report({
+  customerId: "user-123",
+  featureId: "api-calls",
+  amount: 10,
+  idempotencyKey: "request-456", // optional
+});
+
+// Get all usage meters for a customer
+const meters = await revstack.usage.getMeters("user-123");
+
+// Get specific meter
+const meter = await revstack.usage.getMeter("user-123", "api-calls");
+console.log(meter.currentUsage, meter.limit);
+
+// Revert usage (rollback)
+await revstack.usage.revert({
+  customerId: "user-123",
+  featureId: "api-calls",
+  amount: 10,
+  reason: "API request failed",
+});
+```
+
+#### Optimistic Usage Pattern
+
+For AI applications, check first, report optimistically, then revert on failure:
+
+```typescript
+// 1. Check if user has credits
+const { allowed } = await revstack.entitlements.check(
+  userId,
+  "ai-tokens",
+  { amount: 500 }
+);
+
+if (!allowed) {
+  throw new Error("Insufficient credits");
+}
+
+// 2. Report usage immediately
+await revstack.usage.report({
+  customerId: userId,
+  featureId: "ai-tokens",
+  amount: 500,
+});
+
+try {
+  // 3. Call AI service
+  const result = await openai.chat.completions.create({ ... });
+  return result;
+} catch (error) {
+  // 4. Revert if operation fails
+  await revstack.usage.revert({
+    customerId: userId,
+    featureId: "ai-tokens",
+    amount: 500,
+    reason: "AI request failed",
+  });
+  throw error;
+}
+```
+
+### Wallets
+
+Manage customer wallet balances and credits.
+
+```typescript
+// Grant credits (welcome bonus, top-up)
+await revstack.wallets.grantBalance({
+  customerId: "user-123",
+  currency: "USD",
+  amount: 10.0,
+  description: "Welcome bonus",
+});
+
+// Check balance
+const { amount } = await revstack.wallets.getBalance("user-123", "USD");
+
+// List all balances (all currencies)
+const balances = await revstack.wallets.listBalances("user-123");
+
+// Revoke credits (refund, penalty)
+await revstack.wallets.revokeBalance({
+  customerId: "user-123",
+  currency: "USD",
+  amount: 5.0,
+  description: "Refund",
+});
+```
+
+### Plans
+
+Query billing plans (read-only).
+
+```typescript
+// List all active plans
+const { data: plans } = await revstack.plans.list({
+  status: "active",
+});
+
+// Get specific plan with prices and entitlements
+const proPlan = await revstack.plans.get("plan_pro");
+console.log(proPlan.prices);       // billing intervals
+console.log(proPlan.entitlements); // feature allocations
+```
+
+<Info>
+Plan mutations are handled via `revstack.admin.plans` (Control Plane).
+</Info>
+
+### Invoices
+
+Query billing invoices (read-only).
+
+```typescript
+// List invoices for a customer
+const { data: invoices } = await revstack.invoices.list({
+  customerId: "user-123",
+  status: "paid",
+});
+
+// Get specific invoice
+const invoice = await revstack.invoices.get("inv_abc");
+```
+
+### Webhooks
+
+Verify inbound webhook signatures from Revstack.
+
+```typescript
+import express from "express";
+import { Revstack, SignatureVerificationError } from "@revstackhq/node";
+
+const app = express();
+const revstack = new Revstack({ secretKey: process.env.REVSTACK_SECRET_KEY! });
+
+app.post(
+  "/webhooks/revstack",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    try {
+      const event = revstack.webhooks.constructEvent(
+        req.body, // raw Buffer — do NOT parse as JSON
+        req.headers["revstack-signature"] as string,
+        process.env.REVSTACK_WEBHOOK_SECRET!
+      );
+
+      // Handle event
+      switch (event.type) {
+        case "subscription.created":
+          console.log("New subscription:", event.data);
+          break;
+        case "subscription.canceled":
+          console.log("Subscription canceled:", event.data);
+          break;
+        // ... handle other events
+      }
+
+      res.sendStatus(200);
+    } catch (error) {
+      if (error instanceof SignatureVerificationError) {
+        console.error("Invalid webhook signature");
+        return res.status(400).send("Invalid signature");
+      }
+      throw error;
+    }
+  }
+);
+```
+
+<Warning>
+Always use raw body parsing for webhook endpoints. Parsed JSON will fail signature verification.
+</Warning>
+
+## Control Plane (Admin)
+
+Administrative operations for infrastructure management.
+
+### Admin: Plans
+
+```typescript
+// Create a new plan
+const plan = await revstack.admin.plans.create({
+  name: "Professional",
+  slug: "pro",
+  description: "For growing teams",
+  prices: [
+    {
+      currency: "USD",
+      amount: 4900, // $49.00
+      interval: "month",
+    },
+  ],
+});
+
+// Update plan
+await revstack.admin.plans.update("plan_pro", {
+  description: "Updated description",
+});
+
+// Upsert plan (Billing as Code)
+await revstack.admin.plans.upsert({
+  slug: "enterprise",
+  name: "Enterprise",
+  prices: [{ currency: "USD", amount: 19900, interval: "month" }],
+});
+
+// Delete plan
+await revstack.admin.plans.delete("plan_old");
+```
+
+### Admin: Entitlements
+
+```typescript
+// Create entitlement
+const entitlement = await revstack.admin.entitlements.create({
+  key: "api-calls",
+  name: "API Calls",
+  type: "metered",
+  limit: 1000,
+});
+
+// Update entitlement
+await revstack.admin.entitlements.update("ent_abc", {
+  limit: 5000,
+});
+
+// Upsert entitlement
+await revstack.admin.entitlements.upsert({
+  key: "advanced-features",
+  name: "Advanced Features",
+  type: "boolean",
+});
+
+// Delete entitlement
+await revstack.admin.entitlements.delete("ent_old");
+```
+
+### Admin: Integrations
+
+```typescript
+// List integrations
+const { data } = await revstack.admin.integrations.list();
+
+// Get integration
+const integration = await revstack.admin.integrations.get("int_stripe_abc");
+
+// Create integration
+const newIntegration = await revstack.admin.integrations.create({
+  provider: "stripe",
+  credentials: {
+    apiKey: process.env.STRIPE_SECRET_KEY!,
+  },
+});
+
+// Update integration
+await revstack.admin.integrations.update("int_abc", {
+  credentials: { apiKey: "new-key" },
+});
+```
+
+### Admin: Environments
+
+```typescript
+// List environments
+const environments = await revstack.admin.environments.list();
+
+// Get environment
+const env = await revstack.admin.environments.get("env_production");
+
+// Create environment
+const newEnv = await revstack.admin.environments.create({
+  name: "Staging",
+  slug: "staging",
+});
+
+// Update environment
+await revstack.admin.environments.update("env_staging", {
+  name: "Staging (Updated)",
+});
+```
+
+## Error Handling
+
+The SDK exports typed error classes:
+
+```typescript
+import {
+  Revstack,
+  RevstackError,
+  RevstackAPIError,
+  RateLimitError,
+  SignatureVerificationError,
+} from "@revstackhq/node";
+
+try {
+  await revstack.entitlements.check("user-123", "premium-feature");
+} catch (error) {
+  if (error instanceof RateLimitError) {
+    console.error("Rate limit exceeded");
+  } else if (error instanceof RevstackAPIError) {
+    console.error(`API error: ${error.message}`, error.statusCode);
+  } else if (error instanceof RevstackError) {
+    console.error("SDK error:", error.message);
+  }
+}
+```
+
+## Configuration Options
+
+```typescript
+const revstack = new Revstack({
+  secretKey: "sk_live_...",        // required
+  baseUrl: "https://api.custom.com", // optional (default: https://app.revstack.dev/api/v1)
+  timeout: 15000,                    // optional (default: 10000ms)
+});
+```
+
+## TypeScript Support
+
+The SDK is written in TypeScript and includes complete type definitions:
+
+```typescript
+import type {
+  Customer,
+  Subscription,
+  Entitlement,
+  Plan,
+  Invoice,
+  WebhookEvent,
+  PaginatedResponse,
+} from "@revstackhq/node";
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="React SDK" icon="react" href="/sdks/react">
+    Use React hooks for client-side entitlement checks
+  </Card>
+  <Card title="Next.js SDK" icon="grid" href="/sdks/next">
+    Server and client components for Next.js
+  </Card>
+  <Card title="Entitlements" icon="key" href="/concepts/entitlements">
+    Learn about feature gating and access control
+  </Card>
+  <Card title="Usage Tracking" icon="chart-line" href="/concepts/usage-metering">
+    Implement metered billing for your features
+  </Card>
+</CardGroup>

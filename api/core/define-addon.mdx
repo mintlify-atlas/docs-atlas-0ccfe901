@@ -1,0 +1,305 @@
+---
+title: defineAddon
+description: Define an add-on product with type-safe feature references
+---
+
+## Overview
+
+The `defineAddon()` function defines an add-on product that can be purchased on top of a subscription plan. Add-ons can incrementally increase feature limits, set new absolute limits, or grant boolean access to features.
+
+When used with a generic type parameter, it ensures that only features defined in your configuration can be referenced.
+
+## Function Signature
+
+```typescript
+function defineAddon<
+  F extends Record<string, FeatureDefInput> = Record<string, FeatureDefInput>
+>(
+  config: Omit<AddonDefInput, "features"> & {
+    features: F extends Record<string, FeatureDefInput>
+      ? Partial<Record<keyof F, AddonFeatureValue>>
+      : Record<string, AddonFeatureValue>;
+  }
+): AddonDefInput
+```
+
+### Type Parameters
+
+<ParamField path="F" type="Record<string, FeatureDefInput>" default="Record<string, FeatureDefInput>">
+  Feature dictionary type. Pass `typeof yourFeatures` for strict key validation.
+</ParamField>
+
+### Parameters
+
+<ParamField path="config" type="AddonDefInput" required>
+  The add-on configuration object.
+
+  <Expandable title="properties">
+    <ParamField path="name" type="string" required>
+      Human-readable display name for the add-on.
+    </ParamField>
+
+    <ParamField path="description" type="string">
+      Optional description for marketing and documentation.
+    </ParamField>
+
+    <ParamField path="type" type="'recurring' | 'one_time'" required>
+      Billing type:
+      - `recurring`: Charged on every billing cycle
+      - `one_time`: Charged once at purchase
+    </ParamField>
+
+    <ParamField path="amount" type="number" required>
+      Price amount in smallest currency unit (e.g., cents).
+    </ParamField>
+
+    <ParamField path="currency" type="string" required>
+      ISO 4217 currency code (e.g., "USD", "EUR").
+    </ParamField>
+
+    <ParamField path="billing_interval" type="'monthly' | 'quarterly' | 'yearly'">
+      Required if `type === 'recurring'`. Must match the plan's billing interval.
+    </ParamField>
+
+    <ParamField path="features" type="Record<string, AddonFeatureValue>" required>
+      Feature entitlements this add-on modifies or grants.
+
+      <Expandable title="AddonFeatureValue properties">
+        <ParamField path="value_limit" type="number">
+          Numeric limit to add or set.
+        </ParamField>
+
+        <ParamField path="type" type="'increment' | 'set'" default="increment">
+          How the limit is applied:
+          - `increment`: Adds to the base plan's limit
+          - `set`: Completely overrides the base plan's limit
+        </ParamField>
+
+        <ParamField path="has_access" type="boolean">
+          Boolean toggle for granting access to a feature.
+        </ParamField>
+
+        <ParamField path="is_hard_limit" type="boolean">
+          If false, allows overage (relaxes the limit to a soft limit).
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### Returns
+
+<ResponseField name="addon" type="AddonDefInput">
+  The add-on configuration, normalized to `AddonDefInput` type.
+</ResponseField>
+
+## Usage
+
+### Increment Addon (Default Behavior)
+
+Adds to the base plan's feature limit:
+
+```typescript
+import { defineAddon } from "@revstack/core";
+
+export const extraSeats = defineAddon({
+  name: "Extra Seats (5)",
+  description: "Add 5 additional team members",
+  type: "recurring",
+  amount: 500, // $5.00
+  currency: "USD",
+  billing_interval: "monthly",
+  features: {
+    seats: {
+      value_limit: 5,
+      type: "increment", // Adds to the plan's limit
+    },
+  },
+});
+
+// If plan has 10 seats, customer gets 10 + 5 = 15 total seats
+```
+
+### Set Addon (Override Behavior)
+
+Completely replaces the base plan's feature limit:
+
+```typescript
+import { defineAddon } from "@revstack/core";
+
+export const unlimitedStorage = defineAddon({
+  name: "Unlimited Storage",
+  description: "Remove all storage limits",
+  type: "recurring",
+  amount: 4900, // $49.00
+  currency: "USD",
+  billing_interval: "monthly",
+  features: {
+    storage: {
+      value_limit: 999999999999, // Effectively unlimited
+      type: "set", // Replaces the plan's limit entirely
+    },
+  },
+});
+
+// Regardless of plan's storage limit, customer gets 999999999999 bytes
+```
+
+### Boolean Access Addon
+
+Grants access to a premium feature:
+
+```typescript
+import { defineAddon } from "@revstack/core";
+
+export const ssoAddon = defineAddon({
+  name: "SSO Add-on",
+  description: "Enable SAML/OAuth Single Sign-On",
+  type: "recurring",
+  amount: 9900, // $99.00
+  currency: "USD",
+  billing_interval: "monthly",
+  features: {
+    sso: {
+      has_access: true, // Grants boolean access
+    },
+  },
+});
+```
+
+### One-Time Addon
+
+```typescript
+import { defineAddon } from "@revstack/core";
+
+export const onboarding = defineAddon({
+  name: "Premium Onboarding",
+  description: "White-glove setup and migration service",
+  type: "one_time",
+  amount: 199900, // $1,999.00
+  currency: "USD",
+  features: {
+    priority_support: {
+      has_access: true,
+    },
+  },
+});
+```
+
+### Soft Limit Addon
+
+Relaxes a hard limit to allow overage:
+
+```typescript
+import { defineAddon } from "@revstack/core";
+
+export const overageProtection = defineAddon({
+  name: "Overage Protection",
+  description: "Never get blocked - pay only for what you use",
+  type: "recurring",
+  amount: 1900, // $19.00
+  currency: "USD",
+  billing_interval: "monthly",
+  features: {
+    api_calls: {
+      is_hard_limit: false, // Allows overage instead of blocking
+    },
+  },
+});
+```
+
+### Multiple Features
+
+```typescript
+import { defineAddon } from "@revstack/core";
+
+export const growthPack = defineAddon({
+  name: "Growth Pack",
+  description: "Extra seats, storage, and API calls",
+  type: "recurring",
+  amount: 2900, // $29.00
+  currency: "USD",
+  billing_interval: "monthly",
+  features: {
+    seats: {
+      value_limit: 10,
+      type: "increment",
+    },
+    storage: {
+      value_limit: 50_000_000_000, // 50 GB
+      type: "increment",
+    },
+    api_calls: {
+      value_limit: 25000,
+      type: "increment",
+    },
+  },
+});
+```
+
+### Type-Safe with Feature Dictionary
+
+```typescript
+import { defineConfig, defineFeature, defineAddon } from "@revstack/core";
+
+const features = {
+  seats: defineFeature({
+    name: "Team Seats",
+    type: "static",
+    unit_type: "count",
+  }),
+  storage: defineFeature({
+    name: "Storage",
+    type: "metered",
+    unit_type: "bytes",
+  }),
+};
+
+export default defineConfig({
+  features,
+  plans: { /* ... */ },
+  addons: {
+    extra_seats: defineAddon<typeof features>({
+      name: "Extra Seats (5)",
+      type: "recurring",
+      amount: 500,
+      currency: "USD",
+      billing_interval: "monthly",
+      features: {
+        seats: { value_limit: 5, type: "increment" },
+        // typo_feature: { value_limit: 10 }, // ❌ Compile error!
+      },
+    }),
+  },
+});
+```
+
+## Add-on Aggregation Logic
+
+The [EntitlementEngine](/api/core/engine) aggregates add-ons with the following rules:
+
+1. **Processing Order**: "set" add-ons are processed first, then "increment" add-ons
+2. **Increment Behavior**: Limits are summed (plan: 5 seats + addon: 3 seats = 8 total)
+3. **Set Behavior**: Completely replaces the previous limit and tracking source
+4. **Soft Limits**: If ANY source sets `is_hard_limit: false`, the entire feature becomes soft-limited
+5. **Boolean Access**: If ANY source grants `has_access: true`, access is granted
+
+## Validation
+
+The [validator](/api/core/validator) ensures:
+
+- Recurring add-ons have a `billing_interval` that matches the plan's interval
+- Add-ons only reference features defined in `config.features`
+- Add-ons referenced in `price.available_addons` actually exist
+
+## Source
+
+**Location**: [`packages/core/src/define.ts:70-80`](~/workspace/source/packages/core/src/define.ts)
+
+## Related
+
+- [defineConfig](/api/core/define-config) - Define the root configuration
+- [defineFeature](/api/core/define-feature) - Define features modified by add-ons
+- [definePlan](/api/core/define-plan) - Define plans that support add-ons
+- [EntitlementEngine](/api/core/engine) - Evaluates add-on entitlements at runtime
+- [validateConfig](/api/core/validator) - Validates add-on configuration

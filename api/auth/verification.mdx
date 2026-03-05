@@ -1,0 +1,363 @@
+---
+title: "JWT Verification"
+description: "Verify and decode JWT tokens from Auth0, Clerk, Supabase, and other authentication providers"
+---
+
+The `@revstackhq/auth` package provides a unified JWT verification system that works with multiple authentication providers. It handles both RS256 (public key) and HS256 (shared secret) signing strategies.
+
+## TokenVerifier
+
+The `TokenVerifier` class validates JWT tokens against a stored authentication contract.
+
+### Constructor
+
+```typescript
+new TokenVerifier(contract: RevstackAuthContract, options?: TokenVerifierOptions)
+```
+
+<ParamField path="contract" type="RevstackAuthContract" required>
+  The authentication contract defining verification parameters (strategy, JWKS URI, issuer, etc.)
+</ParamField>
+
+<ParamField path="options" type="TokenVerifierOptions">
+  Optional configuration for JWKS caching and timeouts
+</ParamField>
+
+#### TokenVerifierOptions
+
+<ResponseField name="jwksCache" type="RemoteJWKSetOptions">
+  Options passed to the underlying jose library's `createRemoteJWKSet` for cache control and timeouts
+</ResponseField>
+
+### Methods
+
+#### verify
+
+Validates a raw JWT string and returns a session object with user claims.
+
+```typescript
+async verify<T extends Record<string, unknown>>(
+  token: string
+): Promise<RevstackSession<T>>
+```
+
+<ParamField path="token" type="string" required>
+  The JWT token string to verify
+</ParamField>
+
+**Returns:** `Promise<RevstackSession<T>>` - Session object containing user ID, claims, and validation status
+
+<CodeGroup>
+```typescript Node.js
+import { TokenVerifier } from "@revstackhq/auth";
+
+const verifier = new TokenVerifier({
+  provider: "clerk",
+  strategy: "RS256",
+  jwksUri: "https://clerk.your-domain.com/.well-known/jwks.json",
+  issuer: "https://clerk.your-domain.com",
+});
+
+const session = await verifier.verify(token);
+
+if (session.isValid) {
+  console.log("User ID:", session.userId);
+  console.log("Claims:", session.claims);
+} else {
+  console.error("Error:", session.error);
+  console.error("Error Code:", session.errorCode);
+}
+```
+
+```typescript Custom JWT (HS256)
+import { TokenVerifier } from "@revstackhq/auth";
+
+const verifier = new TokenVerifier({
+  provider: "custom",
+  strategy: "HS256",
+  signingSecret: process.env.JWT_SECRET,
+  issuer: "https://myapp.com",
+  audience: "myapp-api",
+  userIdClaim: "sub",
+});
+
+const session = await verifier.verify(token);
+```
+</CodeGroup>
+
+## Types
+
+### RevstackSession
+
+The session object returned by `verify()`:
+
+<ResponseField name="userId" type="string" required>
+  The authenticated user ID extracted from the token (from `sub` or custom claim)
+</ResponseField>
+
+<ResponseField name="claims" type="T extends Record<string, unknown>" required>
+  The raw decoded JWT payload containing all token claims
+</ResponseField>
+
+<ResponseField name="isValid" type="boolean" required>
+  Whether the token passed validation. Check this before trusting `userId` or `claims`
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Human-readable error message if `isValid` is false
+</ResponseField>
+
+<ResponseField name="errorCode" type="AuthErrorCode">
+  Specific error code if `isValid` is false. See [Error Codes](#error-codes)
+</ResponseField>
+
+### RevstackAuthContract
+
+Union type representing either RS256 or HS256 authentication configuration.
+
+#### RS256AuthContract
+
+Used for providers like Auth0, Clerk, Firebase that use public key cryptography:
+
+<ResponseField name="provider" type="AuthProviderSlug" required>
+  Provider identifier: `"auth0"` | `"clerk"` | `"supabase"` | `"cognito"` | `"firebase"` | `"custom"`
+</ResponseField>
+
+<ResponseField name="strategy" type="'RS256'" required>
+  Discriminator for RS256 verification via remote JWKS
+</ResponseField>
+
+<ResponseField name="jwksUri" type="string" required>
+  The JSON Web Key Set URI to verify signatures (e.g., `https://your-domain.auth0.com/.well-known/jwks.json`)
+</ResponseField>
+
+<ResponseField name="issuer" type="string" required>
+  Expected issuer (`iss`) claim value
+</ResponseField>
+
+<ResponseField name="audience" type="string">
+  Expected audience (`aud`) claim value
+</ResponseField>
+
+<ResponseField name="userIdClaim" type="string">
+  Claim holding the unique user ID. Defaults to `"sub"` if not specified
+</ResponseField>
+
+#### HS256AuthContract
+
+Used for custom JWTs or providers that support shared secrets:
+
+<ResponseField name="provider" type="AuthProviderSlug" required>
+  Provider identifier: `"auth0"` | `"clerk"` | `"supabase"` | `"cognito"` | `"firebase"` | `"custom"`
+</ResponseField>
+
+<ResponseField name="strategy" type="'HS256'" required>
+  Discriminator for HS256 verification via shared secret
+</ResponseField>
+
+<ResponseField name="signingSecret" type="string" required>
+  Shared signing secret used to verify signatures
+</ResponseField>
+
+<ResponseField name="issuer" type="string">
+  Expected issuer (`iss`) claim, if enforced
+</ResponseField>
+
+<ResponseField name="audience" type="string">
+  Expected audience (`aud`) claim, if enforced
+</ResponseField>
+
+<ResponseField name="userIdClaim" type="string">
+  Claim holding the unique user ID. Defaults to `"sub"` if not specified
+</ResponseField>
+
+### Error Codes
+
+<ResponseField name="TOKEN_EXPIRED" type="AuthErrorCode">
+  The token has expired (based on `exp` claim)
+</ResponseField>
+
+<ResponseField name="INVALID_SIGNATURE" type="AuthErrorCode">
+  The token signature verification failed
+</ResponseField>
+
+<ResponseField name="ISSUER_MISMATCH" type="AuthErrorCode">
+  The `iss` claim doesn't match the expected issuer
+</ResponseField>
+
+<ResponseField name="NETWORK_ERROR" type="AuthErrorCode">
+  Failed to fetch JWKS from the remote endpoint (RS256 only)
+</ResponseField>
+
+<ResponseField name="MISSING_CLAIM" type="AuthErrorCode">
+  The required user ID claim is missing from the token
+</ResponseField>
+
+<ResponseField name="INVALID_FORMAT" type="AuthErrorCode">
+  The token has malformed JWT structure or failed claim validation
+</ResponseField>
+
+<ResponseField name="UNKNOWN_ERROR" type="AuthErrorCode">
+  An unexpected error occurred during verification
+</ResponseField>
+
+## Provider Input Types
+
+Helper types for creating auth contracts for specific providers:
+
+### Auth0Input
+
+<ParamField path="domain" type="string" required>
+  Auth0 domain, with or without protocol (e.g., `"my-tenant.us.auth0.com"`)
+</ParamField>
+
+<ParamField path="audience" type="string">
+  Expected audience (`aud`)
+</ParamField>
+
+<ParamField path="userIdClaim" type="string">
+  Optional override for user ID claim
+</ParamField>
+
+### ClerkInput
+
+<ParamField path="issuerUrl" type="string" required>
+  Clerk issuer URL (e.g., `"https://clerk.your-domain.com"`)
+</ParamField>
+
+<ParamField path="userIdClaim" type="string">
+  Optional override for user ID claim
+</ParamField>
+
+### SupabaseInput
+
+<ParamField path="projectUrl" type="string" required>
+  Supabase project URL (e.g., `"https://xyzcompany.supabase.co"`)
+</ParamField>
+
+<ParamField path="signingSecret" type="string">
+  Optional JWT signing secret for HS256 verification. If provided, the contract becomes HS256
+</ParamField>
+
+<ParamField path="audience" type="string">
+  Optional expected audience (`aud`)
+</ParamField>
+
+<ParamField path="userIdClaim" type="string">
+  Optional override for user ID claim
+</ParamField>
+
+### FirebaseInput
+
+<ParamField path="projectId" type="string" required>
+  Firebase project ID (e.g., `"my-firebase-project"`)
+</ParamField>
+
+<ParamField path="userIdClaim" type="string">
+  Optional override for user ID claim
+</ParamField>
+
+### CognitoInput
+
+<ParamField path="region" type="string" required>
+  AWS region (e.g., `"us-east-1"`)
+</ParamField>
+
+<ParamField path="userPoolId" type="string" required>
+  Cognito User Pool ID (e.g., `"us-east-1_Abc123"`)
+</ParamField>
+
+<ParamField path="clientId" type="string">
+  Cognito App Client ID (used as `aud`)
+</ParamField>
+
+<ParamField path="userIdClaim" type="string">
+  Optional override for user ID claim
+</ParamField>
+
+### CustomJwtInput
+
+<ParamField path="signingSecret" type="string" required>
+  HS256 signing secret
+</ParamField>
+
+<ParamField path="issuer" type="string">
+  Optional expected issuer (`iss`)
+</ParamField>
+
+<ParamField path="audience" type="string">
+  Optional expected audience (`aud`)
+</ParamField>
+
+<ParamField path="userIdClaim" type="string">
+  Optional override for user ID claim
+</ParamField>
+
+## Example Usage
+
+### Auth0 Integration
+
+```typescript
+import { TokenVerifier } from "@revstackhq/auth";
+
+const verifier = new TokenVerifier({
+  provider: "auth0",
+  strategy: "RS256",
+  jwksUri: "https://my-tenant.auth0.com/.well-known/jwks.json",
+  issuer: "https://my-tenant.auth0.com/",
+  audience: "https://my-api.com",
+});
+
+const session = await verifier.verify(authToken);
+```
+
+### Supabase with HS256
+
+```typescript
+import { TokenVerifier } from "@revstackhq/auth";
+
+const verifier = new TokenVerifier({
+  provider: "supabase",
+  strategy: "HS256",
+  signingSecret: process.env.SUPABASE_JWT_SECRET,
+  issuer: "https://xyzcompany.supabase.co/auth/v1",
+});
+
+const session = await verifier.verify(token);
+```
+
+### Error Handling
+
+```typescript
+const session = await verifier.verify(token);
+
+if (!session.isValid) {
+  switch (session.errorCode) {
+    case "TOKEN_EXPIRED":
+      return res.status(401).json({ error: "Token expired. Please log in again." });
+    case "INVALID_SIGNATURE":
+      return res.status(401).json({ error: "Invalid token signature." });
+    case "ISSUER_MISMATCH":
+      return res.status(401).json({ error: "Token from untrusted issuer." });
+    default:
+      return res.status(401).json({ error: session.error });
+  }
+}
+
+// Token is valid, proceed with request
+const userId = session.userId;
+```
+
+## Best Practices
+
+<Note>
+  **Cache TokenVerifier instances**: Create one verifier per auth provider and reuse it across requests. The JWKS cache is managed internally.
+</Note>
+
+<Warning>
+  **Validate isValid before trusting data**: Always check `session.isValid` before using `userId` or `claims`. Invalid tokens will still return a session object with `isValid: false`.
+</Warning>
+
+<Tip>
+  **Custom claims**: Access custom claims via `session.claims`. For example, if your tokens include a `role` claim: `const role = session.claims.role;`
+</Tip>
