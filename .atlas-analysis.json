@@ -1,0 +1,167 @@
+{
+  "projectType": "framework",
+  "projectName": "Revstack",
+  "projectDescription": "Billing infrastructure for SaaS with entitlements, subscriptions, usage metering, and payment provider abstraction.",
+  "theme": "aspen",
+  "primaryColor": "#1c1c24",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/billing-as-code",
+              "concepts/entitlements",
+              "concepts/usage-metering",
+              "concepts/subscriptions",
+              "concepts/providers"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "sdks/node",
+              "sdks/react",
+              "sdks/next",
+              "sdks/browser"
+            ]
+          },
+          {
+            "group": "CLI",
+            "pages": [
+              "cli/overview",
+              "cli/commands"
+            ]
+          },
+          {
+            "group": "Payment Providers",
+            "pages": [
+              "providers/overview",
+              "providers/stripe",
+              "providers/custom"
+            ]
+          },
+          {
+            "group": "Auth Integration",
+            "pages": [
+              "auth/overview",
+              "auth/auth0",
+              "auth/clerk",
+              "auth/supabase",
+              "auth/cognito",
+              "auth/firebase"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core",
+            "pages": [
+              "api/core/define-config",
+              "api/core/define-feature",
+              "api/core/define-plan",
+              "api/core/define-addon",
+              "api/core/define-discount",
+              "api/core/engine",
+              "api/core/validator"
+            ]
+          },
+          {
+            "group": "Node SDK",
+            "pages": [
+              "api/node/client",
+              "api/node/customers",
+              "api/node/subscriptions",
+              "api/node/entitlements",
+              "api/node/usage",
+              "api/node/wallets",
+              "api/node/plans",
+              "api/node/invoices",
+              "api/node/webhooks",
+              "api/node/admin"
+            ]
+          },
+          {
+            "group": "React SDK",
+            "pages": [
+              "api/react/hooks",
+              "api/react/components"
+            ]
+          },
+          {
+            "group": "Next.js SDK",
+            "pages": [
+              "api/next/client",
+              "api/next/server"
+            ]
+          },
+          {
+            "group": "Browser SDK",
+            "pages": [
+              "api/browser/client"
+            ]
+          },
+          {
+            "group": "Auth",
+            "pages": [
+              "api/auth/verification"
+            ]
+          },
+          {
+            "group": "Providers",
+            "pages": [
+              "api/providers/core",
+              "api/providers/registry"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Billing as Code with type-safe plan and feature definitions",
+    "Multi-platform SDKs (Node.js, React, Next.js, Browser)",
+    "Entitlement engine for feature access control",
+    "Usage metering and quota tracking",
+    "Payment provider abstraction (Stripe, custom providers)",
+    "Auth provider integration (Auth0, Clerk, Supabase, Cognito, Firebase)",
+    "CLI for infrastructure management",
+    "Webhook verification and orchestration"
+  ],
+  "publicApiSurface": [
+    "defineConfig",
+    "defineFeature",
+    "definePlan",
+    "defineAddon",
+    "defineDiscount",
+    "Revstack",
+    "revstack.customers",
+    "revstack.subscriptions",
+    "revstack.entitlements",
+    "revstack.usage",
+    "revstack.wallets",
+    "revstack.plans",
+    "revstack.invoices",
+    "revstack.webhooks",
+    "revstack.admin",
+    "useEntitlement",
+    "useSubscription",
+    "useUsage",
+    "RevstackProvider"
+  ]
+}
