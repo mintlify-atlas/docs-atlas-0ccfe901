@@ -51,7 +51,8 @@
               "sdks/node",
               "sdks/react",
               "sdks/next",
-              "sdks/browser"
+              "sdks/browser",
+              "sdks/ai"
             ]
           },
           {

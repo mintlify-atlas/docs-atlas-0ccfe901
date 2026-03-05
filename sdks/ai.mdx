@@ -1,0 +1,379 @@
+---
+title: "AI SDK"
+description: "Automatic AI usage metering for Vercel AI SDK with Revstack"
+icon: "sparkles"
+---
+
+The `@revstackhq/ai` package provides seamless metering wrappers around Vercel's AI SDK functions. Track AI token consumption automatically and bill customers for AI features without writing custom usage tracking code.
+
+## Installation
+
+<CodeGroup>
+```bash npm
+npm install @revstackhq/ai ai
+```
+
+```bash yarn
+yarn add @revstackhq/ai ai
+```
+
+```bash pnpm
+pnpm add @revstackhq/ai ai
+```
+</CodeGroup>
+
+<Note>
+The `ai` package (Vercel AI SDK) is a peer dependency and must be installed separately.
+</Note>
+
+## Quick Start
+
+The AI SDK provides two approaches:
+
+1. **Direct wrappers** - Use `revstackStreamText` and `revstackGenerateText` for one-off calls
+2. **Factory pattern** - Use `createRevstackAI` to create pre-configured helpers bound to your project
+
+### Direct Wrapper Example
+
+```typescript
+import { revstackStreamText } from "@revstackhq/ai";
+import { openai } from "@ai-sdk/openai";
+
+const result = await revstackStreamText({
+  model: openai("gpt-4"),
+  prompt: "Write a haiku about TypeScript",
+  revstack: {
+    trackUsage: async (usage) => {
+      // Report usage to Revstack
+      await fetch("/api/track-usage", {
+        method: "POST",
+        body: JSON.stringify({
+          feature: "ai-tokens",
+          usage: usage.ai,
+        }),
+      });
+    },
+  },
+});
+```
+
+### Factory Pattern (Recommended)
+
+Create a pre-configured AI helper that automatically tracks usage:
+
+```typescript lib/revstack-ai.ts
+import { trackUsage } from "@revstackhq/next/server";
+import { createRevstackAI } from "@revstackhq/ai";
+
+const config = {
+  secretKey: process.env.REVSTACK_SECRET_KEY!,
+};
+
+export const revstack = createRevstackAI(
+  config,
+  async (key, usage, config) => {
+    await trackUsage(key, usage, config);
+  }
+);
+```
+
+Then use it in your app:
+
+```typescript app/api/generate/route.ts
+import { revstack } from "@/lib/revstack-ai";
+import { openai } from "@ai-sdk/openai";
+
+export async function POST(req: Request) {
+  const { prompt } = await req.json();
+
+  const result = await revstack.generateText({
+    model: openai("gpt-4"),
+    prompt,
+    entitlementKey: "ai-tokens",
+  });
+
+  return Response.json({ text: result.text });
+}
+```
+
+## API Reference
+
+### revstackStreamText
+
+Wraps Vercel's `streamText` with automatic usage tracking. Tracks token consumption when the stream completes.
+
+```typescript
+import { revstackStreamText } from "@revstackhq/ai";
+
+const result = await revstackStreamText({
+  model: openai("gpt-4"),
+  prompt: "Your prompt here",
+  revstack: {
+    trackUsage: async (usage) => {
+      // Called when stream completes
+      console.log(usage.ai.totalTokens);
+    },
+  },
+});
+```
+
+**Parameters:**
+- All parameters from Vercel AI SDK's `streamText`
+- `revstack.trackUsage` - Callback fired with token consumption data
+
+**Usage Data Structure:**
+```typescript
+{
+  ai: {
+    modelId: string;         // e.g. "gpt-4"
+    promptTokens: number;    // Input tokens
+    completionTokens: number; // Output tokens
+    totalTokens: number;     // Total tokens
+  }
+}
+```
+
+### revstackGenerateText
+
+Wraps Vercel's `generateText` with automatic usage tracking. Tracks token consumption after generation completes.
+
+```typescript
+import { revstackGenerateText } from "@revstackhq/ai";
+
+const result = await revstackGenerateText({
+  model: openai("gpt-4"),
+  prompt: "Your prompt here",
+  revstack: {
+    trackUsage: async (usage) => {
+      // Called after generation completes
+      await reportToRevstack(usage);
+    },
+  },
+});
+
+console.log(result.text);
+```
+
+**Parameters:**
+- All parameters from Vercel AI SDK's `generateText`
+- `revstack.trackUsage` - Callback fired with token consumption data
+
+### createRevstackAI
+
+Factory function that creates pre-configured AI helpers bound to your Revstack project.
+
+```typescript
+import { createRevstackAI } from "@revstackhq/ai";
+
+const revstack = createRevstackAI(
+  config,
+  trackingFunction
+);
+```
+
+**Parameters:**
+- `config` - Your configuration object (passed to tracking function)
+- `trackingFunction` - `(key: string, usage: AIUsageData, config: TConfig) => Promise<void>`
+
+**Returns:**
+
+An object with two methods:
+
+#### `streamText(options)`
+
+```typescript
+const stream = await revstack.streamText({
+  model: openai("gpt-4"),
+  prompt: "Your prompt",
+  entitlementKey: "ai-tokens", // Required
+});
+```
+
+Inherits all options from Vercel AI SDK's `streamText` plus:
+- `entitlementKey` - The feature key to track usage against
+
+#### `generateText(options)`
+
+```typescript
+const result = await revstack.generateText({
+  model: openai("gpt-4"),
+  prompt: "Your prompt",
+  entitlementKey: "ai-tokens", // Required
+});
+```
+
+Inherits all options from Vercel AI SDK's `generateText` plus:
+- `entitlementKey` - The feature key to track usage against
+
+## Integration Patterns
+
+### With Next.js Server Actions
+
+```typescript app/actions.ts
+"use server";
+
+import { revstack } from "@/lib/revstack-ai";
+import { openai } from "@ai-sdk/openai";
+
+export async function generateResponse(prompt: string) {
+  const result = await revstack.generateText({
+    model: openai("gpt-4-turbo"),
+    prompt,
+    entitlementKey: "ai-generation",
+  });
+
+  return result.text;
+}
+```
+
+### With Next.js Route Handlers
+
+```typescript app/api/stream/route.ts
+import { revstack } from "@/lib/revstack-ai";
+import { openai } from "@ai-sdk/openai";
+import { StreamingTextResponse } from "ai";
+
+export async function POST(req: Request) {
+  const { prompt } = await req.json();
+
+  const result = await revstack.streamText({
+    model: openai("gpt-4"),
+    prompt,
+    entitlementKey: "ai-streaming",
+  });
+
+  return new StreamingTextResponse(result.toTextStreamResponse());
+}
+```
+
+### Custom Pricing by Model
+
+Track different token costs per model:
+
+```typescript
+import { createRevstackAI } from "@revstackhq/ai";
+import { trackUsage } from "@revstackhq/next/server";
+
+const config = { secretKey: process.env.REVSTACK_SECRET_KEY! };
+
+export const revstack = createRevstackAI(
+  config,
+  async (key, usage, config) => {
+    // Map model to feature key for different pricing
+    const featureKey = usage.ai.modelId.includes("gpt-4") 
+      ? "ai-tokens-premium"
+      : "ai-tokens-standard";
+
+    await trackUsage(featureKey, usage, config);
+  }
+);
+```
+
+## Error Handling
+
+If usage tracking fails (e.g., user exhausted quota), the error is logged but doesn't interrupt the AI response:
+
+```typescript
+const result = await revstackStreamText({
+  model: openai("gpt-4"),
+  prompt: "Hello",
+  revstack: {
+    trackUsage: async (usage) => {
+      try {
+        await trackUsage("ai-tokens", usage, config);
+      } catch (error) {
+        // Error is logged automatically by Revstack
+        // Stream has already completed, so we can't cancel it
+        console.error("Usage tracking failed:", error);
+      }
+    },
+  },
+});
+```
+
+For pre-flight checks before generation, use `getEntitlement`:
+
+```typescript
+import { getEntitlement } from "@revstackhq/next/server";
+
+// Check quota BEFORE generating
+const entitlement = await getEntitlement("ai-tokens", config);
+
+if (!entitlement.hasAccess) {
+  return Response.json(
+    { error: "AI quota exceeded" },
+    { status: 402 }
+  );
+}
+
+// Proceed with generation
+const result = await revstack.generateText({
+  model: openai("gpt-4"),
+  prompt,
+  entitlementKey: "ai-tokens",
+});
+```
+
+## Best Practices
+
+<Accordion title="Always use idempotency keys for production">
+When tracking usage, include idempotency keys to prevent double-billing on retries:
+
+```typescript
+trackUsage: async (usage) => {
+  await fetch("/api/track", {
+    method: "POST",
+    headers: { "Idempotency-Key": requestId },
+    body: JSON.stringify({ usage }),
+  });
+}
+```
+</Accordion>
+
+<Accordion title="Track model ID for accurate pricing">
+Different AI models have different costs. The `modelId` field lets you charge different rates:
+
+```typescript
+// In your revstack.config.ts
+defineFeature({
+  key: "ai-tokens-gpt4",
+  type: "limit",
+  name: "GPT-4 Tokens",
+});
+
+defineFeature({
+  key: "ai-tokens-gpt35",
+  type: "limit",
+  name: "GPT-3.5 Tokens",
+});
+```
+</Accordion>
+
+<Accordion title="Consider prompt vs completion token pricing">
+Some providers charge different rates for input vs output tokens. Use `promptTokens` and `completionTokens` fields:
+
+```typescript
+trackUsage: async (usage) => {
+  // Track input and output separately if needed
+  await trackUsage("ai-input-tokens", { amount: usage.ai.promptTokens }, config);
+  await trackUsage("ai-output-tokens", { amount: usage.ai.completionTokens }, config);
+}
+```
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Usage Metering" icon="chart-line" href="/concepts/usage-metering">
+    Learn about metered features and quotas
+  </Card>
+  <Card title="Next.js Server" icon="N" href="/api/next/server">
+    Server-side usage tracking API
+  </Card>
+  <Card title="Entitlements" icon="shield-check" href="/concepts/entitlements">
+    Check AI quota before generation
+  </Card>
+  <Card title="Vercel AI SDK" icon="external-link" href="https://sdk.vercel.ai">
+    Official Vercel AI SDK documentation
+  </Card>
+</CardGroup>
